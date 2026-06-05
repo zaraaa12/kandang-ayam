@@ -52,7 +52,21 @@ function LoginForm() {
         body: JSON.stringify({ username, password })
       })
 
-      const data = await response.json()
+      let data: any
+      const contentType = response.headers.get("content-type") || ""
+      if (contentType.includes("application/json")) {
+        data = await response.json()
+      } else {
+        const text = await response.text()
+        console.error("Login unexpected response:", text)
+        throw new Error("Respons server bukan JSON.")
+      }
+
+      if (!response.ok) {
+        setError(data?.error || "Terjadi kesalahan pada server. Silakan coba lagi.")
+        setLoading(false)
+        return
+      }
 
       if (data.success && data.user) {
         setAuthCookie({ username: data.user.username, name: data.user.name, role: data.user.role })

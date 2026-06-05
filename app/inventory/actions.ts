@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { deleteInventoryItem, upsertInventoryItem } from "@/lib/inventory-db"
 import type { InventoryItem, KategoriItem } from "@/data/inventory"
 
-const KATEGORI = new Set(["Feed", "Medical", "Parts", "Cleaning", "Utility"])
+const KATEGORI = new Set(["Konstruksi", "Utilitas", "SDM"])
 
 function toInventoryItem(item: InventoryItem): InventoryItem {
   if (!item.id.trim()) {

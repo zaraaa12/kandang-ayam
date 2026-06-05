@@ -1,12 +1,14 @@
 "use client"
 
 import { logout } from "@/lib/auth"
-import { useState, useEffect, useCallback, useTransition } from "react"
+import { useState, useEffect, useCallback, useTransition, useMemo } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { BarChart, Bar, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from "recharts"
 import { deleteFinanceTransactionAction, saveFinanceTransactionAction } from "@/app/finance/actions"
-import { financeSummary, penjualanBulanan, biayaOperasional, dataBulananKeuangan, detailOpsPerBulan, rupiah } from "@/data/finance"
+import { biayaOperasional, rupiah } from "@/data/finance"
+import { deriveDynamicStokTelurBulanan } from "@/lib/livestock-utils"
+import type { StokTelurBulan } from "@/lib/livestock-utils"
 
 // ─── useMounted — prevents SSR↔client hydration mismatch ────────────────────
 function useMounted() {
@@ -17,8 +19,9 @@ function useMounted() {
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-type TxType = "sale" | "expense"
+type TxType = "income" | "expense" | "investor_income" | "warist"
 type ModalMode = "add" | "edit" | null
+type TabType = "income" | "expense" | "investor_income" | "warist"
 
 interface Tx {
   id: string
@@ -30,6 +33,9 @@ interface Tx {
   vol: number
   jumlah: number
   notes: string
+  stock?: number
+  sisa?: number
+  harga?: number
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -42,32 +48,11 @@ const NAV = [
 ]
 const SALE_CATS = ["Penjualan Telur","Penjualan Warist","Penjualan Ayam Afkir","Penjualan Pupuk","Pendapatan Lainnya"]
 const EXP_CATS  = ["Pakan Ayam","Vaksin & Vitamin","Listrik & Air","Peralatan Kebersihan","Makan & Rokok","Gaji Karyawan","Pemeliharaan Kandang","Lain-lain"]
+const INCOME_CATS = ["Penjualan Telur","Penjualan Ayam Afkir","Penjualan Pupuk","Hasil Lainnya","Dana Investasi"]
+const INVESTOR_CATS = ["Dana Investasi","Dana Investasi Modal","Dana Operasional","Dana Darurat","Dana Lainnya"]
+const WARIST_CATS = ["Penjualan Warist"]
 
 const today = () => new Date().toISOString().split("T")[0]
-
-// ─── Seed data ────────────────────────────────────────────────────────────────
-const SEED: Tx[] = [
-  // ★ Penjualan Warist — dana terpisah, 42 ekor ayam afkir
-  { id:"w1", no:"TX-WARIST", type:"sale", date:"2025-12-01", category:"Penjualan Warist", buyer:"Warist", vol:42, jumlah:1_600_000, notes:"Penjualan 42 ekor ayam afkir. Dana terpisah — tidak masuk kas utama." },
-  { id:"a1", no:"TX-210", type:"sale", date:"2026-01-16", category:"Penjualan Telur", buyer:"Pembeli Lokal",  vol:11,  jumlah:286_000,   notes:"" },
-  { id:"a2", no:"TX-209", type:"sale", date:"2026-01-15", category:"Penjualan Telur", buyer:"Pasar Mandiri", vol:35,  jumlah:910_000,   notes:"" },
-  { id:"a3", no:"TX-208", type:"sale", date:"2026-01-14", category:"Penjualan Telur", buyer:"AgroMart",      vol:38,  jumlah:988_000,   notes:"" },
-  { id:"a4", no:"TX-207", type:"sale", date:"2026-01-13", category:"Penjualan Telur", buyer:"Pembeli Lokal", vol:3,   jumlah:78_000,    notes:"" },
-  { id:"a5", no:"TX-206", type:"sale", date:"2026-01-12", category:"Penjualan Telur", buyer:"Distributor A", vol:29,  jumlah:754_000,   notes:"" },
-  { id:"a6", no:"TX-205", type:"sale", date:"2026-01-11", category:"Penjualan Telur", buyer:"FreshEgg Co.",  vol:43,  jumlah:1_118_000, notes:"" },
-  { id:"b1", no:"EX-001", type:"expense", date:"2026-01-10", category:"Pakan Ayam",    buyer:"Supplier Pakan", vol:0, jumlah:3_650_000, notes:"21 karung @50kg" },
-  { id:"b2", no:"EX-002", type:"expense", date:"2026-01-05", category:"Gaji Karyawan", buyer:"Warist",        vol:0, jumlah:3_000_000, notes:"Gaji Jan 2026" },
-]
-
-const seedMainSale = SEED
-  .filter(t => t.type === "sale" && t.category !== "Penjualan Warist")
-  .reduce((sum, t) => sum + t.jumlah, 0)
-const seedExpense = SEED
-  .filter(t => t.type === "expense")
-  .reduce((sum, t) => sum + t.jumlah, 0)
-const seedWarist = SEED
-  .filter(t => t.category === "Penjualan Warist")
-  .reduce((sum, t) => sum + t.jumlah, 0)
 
 // ─── Input style ──────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -137,10 +122,10 @@ function DeleteDialog({ tx, onConfirm, onCancel }: { tx: Tx; onConfirm:()=>void;
           </p>
         </div>
         <div style={{ padding:"16px 24px", borderTop:"1px solid #3c4a42", display:"flex", justifyContent:"flex-end", gap:12 }}>
-          <button onClick={onCancel} style={{ padding:"10px 20px", background:"transparent", border:"1px solid #3c4a42", borderRadius:8, color:"#bbcabf", cursor:"pointer", fontSize:13, fontWeight:700 }}>
+          <button type="button" onClick={onCancel} style={{ padding:"10px 20px", background:"transparent", border:"1px solid #3c4a42", borderRadius:8, color:"#bbcabf", cursor:"pointer", fontSize:13, fontWeight:700 }}>
             Batal
           </button>
-          <button onClick={onConfirm} style={{ padding:"10px 20px", background:"#93000a", border:"none", borderRadius:8, color:"#ffdad6", cursor:"pointer", fontSize:13, fontWeight:700, display:"flex", alignItems:"center", gap:6 }}>
+          <button type="button" onClick={onConfirm} style={{ padding:"10px 20px", background:"#93000a", border:"none", borderRadius:8, color:"#ffdad6", cursor:"pointer", fontSize:13, fontWeight:700, display:"flex", alignItems:"center", gap:6 }}>
             <span className="material-symbols-outlined" style={{ fontSize:16 }}>delete</span>
             Hapus
           </button>
@@ -150,7 +135,12 @@ function DeleteDialog({ tx, onConfirm, onCancel }: { tx: Tx; onConfirm:()=>void;
   )
 }
 
-// ─── Transaction Modal (Add / Edit) ──────────────────────────────────────────
+function parseRupiahValue(value: string | number) {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.round(value) : 0
+  const cleaned = String(value).replace(/[^0-9-]/g, "")
+  return cleaned.length > 0 ? Math.round(Number(cleaned)) : 0
+}
+
 function TxModal({
   mode, initial, onSave, onClose,
 }: {
@@ -159,22 +149,41 @@ function TxModal({
   onSave: (data: Omit<Tx,"id"|"no">) => void
   onClose: () => void
 }) {
-  const [form, setForm] = useState<Omit<Tx,"id"|"no">>({
-    type:     initial.type     ?? "sale",
-    date:     initial.date     ?? today(),
-    category: initial.category ?? SALE_CATS[0],
-    buyer:    initial.buyer    ?? "",
-    vol:      initial.vol      ?? 0,
-    jumlah:   initial.jumlah   ?? 0,
-    notes:    initial.notes    ?? "",
+  const [form, setForm] = useState<Omit<Tx,"id"|"no"> & { jumlahInput: string; hargaInput: string }>({
+    type:       initial.type     ?? "expense",
+    date:       initial.date     ?? today(),
+    category:   initial.category ?? "",
+    buyer:      initial.buyer    ?? "",
+    vol:        initial.vol      ?? 0,
+    jumlah:     initial.jumlah   ?? 0,
+    jumlahInput: initial.jumlah ? rupiah(initial.jumlah) : "",
+    hargaInput:  initial.vol && initial.jumlah ? rupiah(Math.round(initial.jumlah / initial.vol)) : "",
+    notes:      initial.notes    ?? "",
   })
 
-  const cats = form.type === "sale" ? SALE_CATS : EXP_CATS
+  useEffect(() => {
+    if (form.category === "") {
+      let cats: string[] = []
+      switch (form.type) {
+        case "income": cats = INCOME_CATS; break
+        case "investor_income": cats = INVESTOR_CATS; break
+        case "warist": cats = WARIST_CATS; break
+        case "expense": cats = EXP_CATS; break
+      }
+      if (cats.length > 0) setForm(f => ({ ...f, category: cats[0] }))
+    }
+  }, [form.type, form.category])
 
-  function setType(t: TxType) {
-    setForm(f => ({ ...f, type: t, category: t === "sale" ? SALE_CATS[0] : EXP_CATS[0] }))
-  }
-  function set(k: keyof typeof form, v: string | number | boolean) {
+  const cats = (() => {
+    switch (form.type) {
+      case "income": return INCOME_CATS
+      case "investor_income": return INVESTOR_CATS
+      case "warist": return WARIST_CATS
+      case "expense": return EXP_CATS
+    }
+  })()
+
+  const set = (k: keyof typeof form, v: string | number | boolean) => {
     setForm(f => ({ ...f, [k]: v }))
   }
 
@@ -191,21 +200,45 @@ function TxModal({
     return () => window.removeEventListener("keydown", handler)
   }, [onClose])
 
-  const isSale = form.type === "sale"
+  const typeLabels: Record<TxType, string> = {
+    income: "Pemasukan",
+    expense: "Pengeluaran",
+    investor_income: "Pemasukan Investor",
+    warist: "Dana Terpisah (Warist)"
+  }
+
+  const typeIcons: Record<TxType, string> = {
+    income: "trending_up",
+    expense: "trending_down",
+    investor_income: "account_balance",
+    warist: "star"
+  }
+
+  const typeColors: Record<TxType, { bg: string; text: string; highlight: string }> = {
+    income: { bg: "#4edea3", text: "#003824", highlight: "#4edea3" },
+    expense: { bg: "#ffb95f", text: "#2a1700", highlight: "#ffb95f" },
+    investor_income: { bg: "#7c3aed", text: "#f3e8ff", highlight: "#a78bfa" },
+    warist: { bg: "#fbbf24", text: "#451a03", highlight: "#fbbf24" }
+  }
+
+  const colors = typeColors[form.type]
+  const hargaPerUnit = form.vol > 0 ? Math.round(form.jumlah / form.vol) : 0
+  const subtotal = form.jumlah
+  const showVolume = form.type !== "investor_income"
 
   return (
     <div
       style={{ position:"fixed", inset:0, zIndex:100, background:"rgba(0,0,0,0.82)", backdropFilter:"blur(6px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div style={{ background:"#2a2a2a", width:"100%", maxWidth:560, border:"1px solid #3c4a42", boxShadow:"0 24px 64px rgba(0,0,0,0.6)", borderRadius:8, overflow:"hidden", display:"flex", flexDirection:"column", maxHeight:"calc(100vh - 48px)" }}>
+      <div style={{ background:"#2a2a2a", width:"100%", maxWidth:560, border:`1px solid ${colors.highlight}33`, boxShadow:"0 24px 64px rgba(0,0,0,0.6)", borderRadius:8, overflow:"hidden", display:"flex", flexDirection:"column", maxHeight:"calc(100vh - 48px)" }}>
 
         {/* Header */}
-        <header style={{ height:64, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 24px", borderBottom:"1px solid #3c4a42", background:"#353534", flexShrink:0 }}>
+        <header style={{ height:64, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 24px", borderBottom:`1px solid ${colors.highlight}33`, background:"#353534", flexShrink:0 }}>
           <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-            <span className="material-symbols-outlined" style={{ color:"#4edea3", fontSize:22 }}>account_balance_wallet</span>
+            <span className="material-symbols-outlined" style={{ color:colors.highlight, fontSize:22 }}>{typeIcons[form.type]}</span>
             <h2 style={{ margin:0, fontSize:22, fontWeight:600, color:"#e5e2e1", letterSpacing:"-0.01em" }}>
-              {mode === "add" ? "Record New Transaction" : "Edit Transaction"}
+              {mode === "add" ? `Tambah ${typeLabels[form.type]}` : `Edit ${typeLabels[form.type]}`}
             </h2>
           </div>
           <button onClick={onClose} style={{ background:"transparent", border:"none", color:"#bbcabf", cursor:"pointer", padding:8, borderRadius:"50%", lineHeight:0, transition:"all 0.15s" }}
@@ -220,45 +253,36 @@ function TxModal({
         <form onSubmit={handleSubmit} style={{ overflowY:"auto", flex:1 }}>
           <div style={{ padding:24, display:"flex", flexDirection:"column", gap:24 }}>
 
-            {/* Sale / Expense toggle */}
-            <div style={{ display:"flex", padding:4, background:"#0e0e0e", borderRadius:8, border:"1px solid #3c4a42" }}>
-              {(["sale","expense"] as TxType[]).map(t => (
-                <button
-                  key={t} type="button" onClick={() => setType(t)}
-                  style={{
-                    flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8,
-                    padding:"10px 16px", borderRadius:6, border:"none", cursor:"pointer",
-                    background: form.type === t ? "#10b981" : "transparent",
-                    color: form.type === t ? "#00422b" : "#bbcabf",
-                    fontWeight: form.type === t ? 700 : 400,
-                    fontSize:11, letterSpacing:"0.05em", textTransform:"uppercase",
-                    transition:"all 0.15s",
-                  }}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize:18 }}>
-                    {t === "sale" ? "trending_up" : "trending_down"}
-                  </span>
-                  {t === "sale" ? "Sale" : "Expense"}
-                </button>
-              ))}
+            {/* Type indicator */}
+            <div style={{ display:"flex", padding:4, background:"#0e0e0e", borderRadius:8, border:`1px solid ${colors.highlight}33` }}>
+              <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"10px 16px", borderRadius:6, background:colors.bg, color:colors.text, fontWeight:700, fontSize:11, letterSpacing:"0.05em", textTransform:"uppercase" }}>
+                <span className="material-symbols-outlined" style={{ fontSize:18 }}>{typeIcons[form.type]}</span>
+                {typeLabels[form.type]}
+              </div>
             </div>
 
-            {/* Date + Category */}
+            {/* Tanggal + Kategori */}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
               <div>
-                <label style={labelStyle}>Transaction Date</label>
+                <label style={labelStyle}>Tanggal</label>
                 <input type="date" value={form.date} onChange={e => set("date", e.target.value)}
                   required style={inputStyle}
-                  onFocus={e => (e.target.style.borderColor = "#4edea3")}
+                  onFocus={e => (e.target.style.borderColor = colors.highlight)}
                   onBlur={e => (e.target.style.borderColor = "#3c4a42")}
                 />
               </div>
               <div style={{ position:"relative" }}>
-                <label style={labelStyle}>Category</label>
+                <label style={labelStyle}>Kategori</label>
                 <div style={{ position:"relative" }}>
-                  <select value={form.category} onChange={e => set("category", e.target.value)}
+                  <select value={form.category} onChange={e => {
+                      const value = e.target.value
+                      if (form.type === "income" && value === "Dana Investasi") {
+                        set("type", "investor_income")
+                      }
+                      set("category", value)
+                    }}
                     style={{ ...inputStyle, appearance:"none", paddingRight:40, cursor:"pointer" }}
-                    onFocus={e => (e.target.style.borderColor = "#4edea3")}
+                    onFocus={e => (e.target.style.borderColor = colors.highlight)}
                     onBlur={e => (e.target.style.borderColor = "#3c4a42")}
                   >
                     {cats.map(c => <option key={c} value={c}>{c}</option>)}
@@ -270,339 +294,149 @@ function TxModal({
               </div>
             </div>
 
-            {/* Amount */}
+            {/* Item / Sumber */}
             <div>
-              <label style={labelStyle}>Amount (Rp)</label>
-              <div style={{ position:"relative" }}>
-                <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"#bbcabf", fontSize:13, fontWeight:500 }}>Rp</span>
-                <input
-                  type="number" min={0} step={1000}
-                  value={form.jumlah || ""}
-                  onChange={e => set("jumlah", +e.target.value)}
-                  required placeholder="0"
-                  style={{ ...inputStyle, paddingLeft:40, textAlign:"right", fontVariantNumeric:"tabular-nums" }}
-                  onFocus={e => (e.target.style.borderColor = "#4edea3")}
-                  onBlur={e => (e.target.style.borderColor = "#3c4a42")}
-                />
-              </div>
-              {form.jumlah > 0 && (
-                <p style={{ fontSize:12, color:"#4edea3", marginTop:6 }}>
-                  {rupiah(form.jumlah)}
-                </p>
-              )}
-            </div>
-
-            {/* Volume — only for sale */}
-            {isSale && (
-              <div>
-                <label style={labelStyle}>Volume (kg)</label>
-                <div style={{ position:"relative" }}>
-                  <input
-                    type="number" min={0} step={0.5}
-                    value={form.vol || ""}
-                    onChange={e => set("vol", +e.target.value)}
-                    placeholder="0.0"
-                    style={inputStyle}
-                    onFocus={e => (e.target.style.borderColor = "#4edea3")}
-                    onBlur={e => (e.target.style.borderColor = "#3c4a42")}
-                  />
-                  <span style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", color:"#bbcabf", fontSize:12 }}>kg</span>
-                </div>
-                {form.vol > 0 && form.jumlah > 0 && (
-                  <p style={{ fontSize:12, color:"#bbcabf", marginTop:6 }}>
-                    Harga/kg: {rupiah(Math.round(form.jumlah / form.vol), true)}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* Buyer / Vendor */}
-            <div>
-              <label style={labelStyle}>{isSale ? "Buyer Name" : "Vendor / Supplier"}</label>
+              <label style={labelStyle}>{form.type === "investor_income" ? "Sumber Dana / Investor" : "Item / Nama"}</label>
               <div style={{ position:"relative" }}>
                 <input
                   type="text"
                   value={form.buyer}
                   onChange={e => set("buyer", e.target.value)}
-                  placeholder={isSale ? "Enter buyer name..." : "Enter vendor name..."}
+                  placeholder={form.type === "investor_income" ? "Contoh: PT Agri, Investor Lokal..." : "Contoh: Pakan Ayam, Vaksin..."}
                   style={inputStyle}
-                  onFocus={e => (e.target.style.borderColor = "#4edea3")}
+                  onFocus={e => (e.target.style.borderColor = colors.highlight)}
                   onBlur={e => (e.target.style.borderColor = "#3c4a42")}
                 />
                 <span className="material-symbols-outlined" style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", color:"#86948a", fontSize:20 }}>
-                  person
+                  {form.type === "investor_income" ? "business" : "inventory_2"}
                 </span>
               </div>
             </div>
 
+            {/* Qty — hanya untuk income, expense, warist */}
+            {showVolume && (
+              <div>
+                <label style={labelStyle}>Kuantitas</label>
+                <input
+                  type="number" min={0} step={0.01}
+                  value={form.vol || ""}
+                  onChange={e => set("vol", +e.target.value)}
+                  placeholder="0"
+                  required
+                  style={inputStyle}
+                  onFocus={e => (e.target.style.borderColor = colors.highlight)}
+                  onBlur={e => (e.target.style.borderColor = "#3c4a42")}
+                />
+              </div>
+            )}
+
+            {/* Harga per Unit — hanya untuk income, expense, warist */}
+            {showVolume && (
+              <div>
+                <label style={labelStyle}>Harga per Unit (Rp)</label>
+                <div style={{ position:"relative" }}>
+                  <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"#bbcabf", fontSize:13, fontWeight:500 }}>Rp</span>
+                  <input
+                    type="text"
+                    value={form.hargaInput}
+                    onChange={e => {
+                      const value = e.target.value
+                      const newHarga = parseRupiahValue(value)
+                      set("hargaInput", value)
+                      set("jumlah", form.vol * newHarga)
+                    }}
+                    placeholder="Rp0"
+                    required
+                    style={{ ...inputStyle, paddingLeft:40, textAlign:"right", fontVariantNumeric:"tabular-nums" }}
+                    onFocus={e => (e.target.style.borderColor = colors.highlight)}
+                    onBlur={e => (e.target.style.borderColor = "#3c4a42")}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Jumlah — untuk investor_income atau jika tidak ada qty */}
+            {!showVolume && (
+              <div>
+                <label style={labelStyle}>Jumlah Dana (Rp)</label>
+                <div style={{ position:"relative" }}>
+                  <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"#bbcabf", fontSize:13, fontWeight:500 }}>Rp</span>
+                  <input
+                    type="text"
+                    value={form.jumlahInput}
+                    onChange={e => {
+                      const value = e.target.value
+                      set("jumlahInput", value)
+                      set("jumlah", parseRupiahValue(value))
+                    }}
+                    placeholder="Rp0"
+                    required
+                    style={{ ...inputStyle, paddingLeft:40, textAlign:"right", fontVariantNumeric:"tabular-nums" }}
+                    onFocus={e => (e.target.style.borderColor = colors.highlight)}
+                    onBlur={e => (e.currentTarget.style.borderColor = "#3c4a42")}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Subtotal Preview */}
+            <div style={{ padding:16, background:`${colors.highlight}12`, border:`1px solid ${colors.highlight}25`, borderRadius:8 }}>
+              <p style={{ margin:"0 0 8px", fontSize:11, fontWeight:700, color:"#bbcabf", textTransform:"uppercase", letterSpacing:"0.05em" }}>Total</p>
+              <p style={{ margin:0, fontSize:24, fontWeight:700, color:colors.highlight, fontVariantNumeric:"tabular-nums" }}>
+                {subtotal > 0 ? `Rp${subtotal.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}` : "Rp0"}
+              </p>
+              {showVolume && (
+                <p style={{ margin:"8px 0 0", fontSize:12, color:"#86948a" }}>
+                  {form.vol} × Rp{hargaPerUnit.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
+                </p>
+              )}
+            </div>
+
             {/* Notes */}
             <div>
-              <label style={labelStyle}>Notes</label>
+              <label style={labelStyle}>Catatan (Opsional)</label>
               <textarea
                 value={form.notes}
                 onChange={e => set("notes", e.target.value)}
-                placeholder="Add transaction details or batch references..."
+                placeholder="Keterangan tambahan..."
                 rows={3}
                 style={{ ...inputStyle, resize:"none", lineHeight:1.6 }}
-                onFocus={e => (e.target.style.borderColor = "#4edea3")}
+                onFocus={e => (e.target.style.borderColor = colors.highlight)}
                 onBlur={e => (e.target.style.borderColor = "#3c4a42")}
               />
             </div>
 
             {/* Info box */}
-            <div style={{ padding:16, background:"rgba(78,222,163,0.05)", border:"1px solid rgba(78,222,163,0.2)", borderRadius:8, display:"flex", alignItems:"flex-start", gap:12 }}>
-              <span className="material-symbols-outlined" style={{ color:"#4edea3", fontSize:20, marginTop:1 }}>info</span>
+            <div style={{ padding:16, background:`${colors.highlight}08`, border:`1px solid ${colors.highlight}20`, borderRadius:8, display:"flex", alignItems:"flex-start", gap:12 }}>
+              <span className="material-symbols-outlined" style={{ color:colors.highlight, fontSize:20, marginTop:1 }}>info</span>
               <p style={{ margin:0, fontSize:14, color:"#bbcabf", lineHeight:1.6 }}>
-                Transaksi ini akan dicatat dalam{" "}
-                <strong style={{ color:"#4edea3" }}>
-                  {form.type === "sale" ? "Log Penjualan" : "Log Pengeluaran"}
-                </strong>{" "}
-                dan memperbarui ringkasan keuangan Kandang P-882.
+                {form.type === "income" && `Pemasukan dari penjualan akan dicatat dalam Log Pemasukan dan memperbaharui saldo kas.`}
+                {form.type === "expense" && `Pengeluaran akan dicatat dalam Log Pengeluaran dan mengurangi saldo kas.`}
+                {form.type === "investor_income" && `Dana investor akan dicatat terpisah dan mempengaruhi total modal/investasi.`}
+                {form.type === "warist" && `Dana warist (Penjualan Warist) tidak masuk kas utama namun tetap tercatat untuk transparansi.`}
               </p>
             </div>
           </div>
 
           {/* Footer */}
-          <footer style={{ padding:"16px 24px", borderTop:"1px solid #3c4a42", background:"#353534", display:"flex", alignItems:"center", justifyContent:"flex-end", gap:12, flexShrink:0 }}>
+          <footer style={{ padding:"16px 24px", borderTop:`1px solid ${colors.highlight}33`, background:"#353534", display:"flex", alignItems:"center", justifyContent:"flex-end", gap:12, flexShrink:0 }}>
             <button type="button" onClick={onClose}
               style={{ padding:"10px 24px", background:"transparent", border:"1px solid transparent", borderRadius:8, color:"#bbcabf", cursor:"pointer", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", transition:"all 0.15s" }}
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#3c4a42"; (e.currentTarget as HTMLButtonElement).style.color = "#e5e2e1" }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#bbcabf" }}
             >
-              Cancel
+              Batal
             </button>
             <button type="submit"
-              style={{ padding:"10px 32px", background:"#4edea3", border:"none", borderRadius:8, color:"#003824", cursor:"pointer", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", display:"flex", alignItems:"center", gap:8, boxShadow:"0 4px 16px rgba(78,222,163,0.25)", transition:"filter 0.15s, transform 0.1s" }}
+              style={{ padding:"10px 32px", background:colors.bg, border:"none", borderRadius:8, color:colors.text, cursor:"pointer", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", display:"flex", alignItems:"center", gap:8, boxShadow:`0 4px 16px ${colors.highlight}40`, transition:"filter 0.15s, transform 0.1s" }}
               onMouseEnter={e => (e.currentTarget.style.filter = "brightness(1.1)")}
               onMouseLeave={e => (e.currentTarget.style.filter = "brightness(1)")}
             >
               <span className="material-symbols-outlined" style={{ fontSize:18 }}>save</span>
-              Save Transaction
+              Simpan
             </button>
           </footer>
         </form>
-      </div>
-    </div>
-  )
-}
-
-// ─── Warist Modal ────────────────────────────────────────────────────────────
-
-interface WaristTx {
-  id?: string
-  no?: string
-  date?: string
-  buyer?: string
-  vol?: number
-  jumlah?: number
-  notes?: string
-}
-
-function WaristModal({ mode, initial, onSave, onClose }: {
-  mode: "add" | "edit"
-  initial: WaristTx
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onSave: (data: any) => void
-  onClose: () => void
-}) {
-  const [form, setForm] = useState({
-    type:   "sale" as const,
-    date:   initial.date   ?? today(),
-    buyer:  initial.buyer  ?? "Warist",
-    vol:    initial.vol    ?? 0,
-    jumlah: initial.jumlah ?? 0,
-    notes:  initial.notes  ?? "",
-  })
-  const set = (k: keyof typeof form, v: string | number) => setForm(f => ({ ...f, [k]: v }))
-
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose() }
-    window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h)
-  }, [onClose])
-
-  const hargaPerEkor = form.vol > 0 && form.jumlah > 0
-    ? Math.round(form.jumlah / form.vol).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")
-    : null
-
-  return (
-    <div
-      style={{ position:"fixed", inset:0, zIndex:100, background:"rgba(0,0,0,0.84)", backdropFilter:"blur(6px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div style={{ background:"#2a2a2a", width:"100%", maxWidth:520, border:"1px solid #3c4a42", borderRadius:8, overflow:"hidden", display:"flex", flexDirection:"column", maxHeight:"calc(100vh - 48px)", boxShadow:"0 24px 64px rgba(0,0,0,0.6)" }}>
-
-        {/* Header */}
-        <header style={{ height:64, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 24px", borderBottom:"1px solid #3c4a42", background:"#353534", flexShrink:0 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-            <span className="material-symbols-outlined" style={{ color:"#ffb95f", fontSize:22 }}>star</span>
-            <div>
-              <h2 style={{ margin:0, fontSize:18, fontWeight:600, color:"#e5e2e1", lineHeight:1 }}>
-                {mode === "add" ? "Tambah Dana Terpisah" : `Edit ${initial.no ?? "TX-WARIST"}`}
-              </h2>
-              <p style={{ margin:"3px 0 0", fontSize:11, color:"#86948a" }}>Penjualan Warist · dana tidak masuk kas utama</p>
-            </div>
-          </div>
-          <button onClick={onClose}
-            style={{ background:"transparent", border:"none", color:"#bbcabf", cursor:"pointer", padding:8, borderRadius:"50%", lineHeight:0 }}
-            onMouseEnter={e => (e.currentTarget.style.background = "#3a3939")}
-            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-          >
-            <span className="material-symbols-outlined">close</span>
-          </button>
-        </header>
-
-        {/* Body */}
-        <form
-          onSubmit={e => { e.preventDefault(); onSave(form) }}
-          style={{ overflowY:"auto", flex:1, display:"flex", flexDirection:"column" }}
-        >
-          <div style={{ padding:24, display:"flex", flexDirection:"column", gap:20 }}>
-
-            {/* Toggle indicator — visual only */}
-            <div style={{ display:"flex", padding:4, background:"#0e0e0e", borderRadius:8, border:"1px solid rgba(255,185,95,0.25)" }}>
-              <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"10px 16px", borderRadius:6, background:"rgba(255,185,95,0.12)", color:"#ffb95f", fontWeight:700, fontSize:11, letterSpacing:"0.05em", textTransform:"uppercase" }}>
-                <span className="material-symbols-outlined" style={{ fontSize:18 }}>star</span>
-                {mode === "add" ? "Dana Terpisah Baru" : "Edit Dana Terpisah"}
-              </div>
-            </div>
-
-            {/* Tanggal + Nama penjual */}
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
-              <div>
-                <label style={labelStyle}>Tanggal Transaksi</label>
-                <input type="date" value={form.date} onChange={e => set("date", e.target.value)}
-                  required style={inputStyle}
-                  onFocus={e => (e.target.style.borderColor = "#ffb95f")}
-                  onBlur={e => (e.target.style.borderColor = "#3c4a42")}
-                />
-              </div>
-              <div>
-                <label style={labelStyle}>Nama Penjual / Pemilik Dana</label>
-                <div style={{ position:"relative" }}>
-                  <input type="text" value={form.buyer} onChange={e => set("buyer", e.target.value)}
-                    placeholder="Warist" style={inputStyle}
-                    onFocus={e => (e.target.style.borderColor = "#ffb95f")}
-                    onBlur={e => (e.target.style.borderColor = "#3c4a42")}
-                  />
-                  <span className="material-symbols-outlined" style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", color:"#86948a", fontSize:18 }}>person</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Jumlah ekor */}
-            <div>
-              <label style={labelStyle}>Jumlah Ayam Terjual (ekor)</label>
-              <div style={{ position:"relative" }}>
-                <input type="number" min={1} value={form.vol || ""} onChange={e => set("vol", +e.target.value)}
-                  placeholder="0" required style={inputStyle}
-                  onFocus={e => (e.target.style.borderColor = "#ffb95f")}
-                  onBlur={e => (e.target.style.borderColor = "#3c4a42")}
-                />
-                <span style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", fontSize:12, color:"#86948a" }}>ekor</span>
-              </div>
-            </div>
-
-            {/* Total nilai */}
-            <div>
-              <label style={labelStyle}>Total Nilai (Rp)</label>
-              <div style={{ position:"relative" }}>
-                <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"#86948a", fontSize:13, fontWeight:500 }}>Rp</span>
-                <input type="number" min={0} step={1000} value={form.jumlah || ""} onChange={e => set("jumlah", +e.target.value)}
-                  placeholder="0" required
-                  style={{ ...inputStyle, paddingLeft:40, textAlign:"right", fontVariantNumeric:"tabular-nums" }}
-                  onFocus={e => (e.target.style.borderColor = "#ffb95f")}
-                  onBlur={e => (e.target.style.borderColor = "#3c4a42")}
-                />
-              </div>
-              {/* Live preview */}
-              {form.jumlah > 0 && (
-                <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, fontSize:12 }}>
-                  <span style={{ color:"#ffb95f", fontWeight:600 }}>{rupiah(form.jumlah)}</span>
-                  {hargaPerEkor && (
-                    <span style={{ color:"#86948a" }}>≈ Rp{hargaPerEkor}/ekor</span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Catatan */}
-            <div>
-              <label style={labelStyle}>Catatan</label>
-              <textarea value={form.notes} onChange={e => set("notes", e.target.value)}
-                placeholder="Keterangan penjualan, kondisi ayam, keperluan dana, dsb..."
-                rows={3} style={{ ...inputStyle, resize:"none", lineHeight:1.6 }}
-                onFocus={e => (e.target.style.borderColor = "#ffb95f")}
-                onBlur={e => (e.target.style.borderColor = "#3c4a42")}
-              />
-            </div>
-
-            {/* Info box — dana terpisah */}
-            <div style={{ padding:14, background:"rgba(255,185,95,0.06)", border:"1px solid rgba(255,185,95,0.22)", borderRadius:8, display:"flex", gap:10, alignItems:"flex-start" }}>
-              <span className="material-symbols-outlined" style={{ color:"#ffb95f", fontSize:18, marginTop:2 }}>info</span>
-              <p style={{ margin:0, fontSize:13, color:"#bbcabf", lineHeight:1.6 }}>
-                Transaksi ini dicatat sebagai <strong style={{ color:"#ffb95f" }}>dana terpisah (Penjualan Warist)</strong> —
-                tidak masuk kas utama kandang, namun tetap tercatat di log keuangan untuk transparansi.
-              </p>
-            </div>
-          </div>
-
-          {/* Footer */}
-          <footer style={{ padding:"16px 24px", borderTop:"1px solid #3c4a42", background:"#353534", display:"flex", justifyContent:"flex-end", gap:12, flexShrink:0 }}>
-            <button type="button" onClick={onClose}
-              style={{ padding:"10px 24px", background:"transparent", border:"1px solid transparent", borderRadius:8, color:"#bbcabf", cursor:"pointer", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#3c4a42"; (e.currentTarget as HTMLButtonElement).style.color = "#e5e2e1" }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "transparent"; (e.currentTarget as HTMLButtonElement).style.color = "#bbcabf" }}
-            >
-              Cancel
-            </button>
-            <button type="submit"
-              style={{ padding:"10px 28px", background:"#ffb95f", border:"none", borderRadius:8, color:"#2a1700", cursor:"pointer", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.05em", display:"flex", alignItems:"center", gap:8, boxShadow:"0 4px 16px rgba(255,185,95,0.25)" }}
-              onMouseEnter={e => (e.currentTarget.style.filter = "brightness(1.1)")}
-              onMouseLeave={e => (e.currentTarget.style.filter = "brightness(1)")}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize:18 }}>save</span>
-              {mode === "add" ? "Simpan Dana Terpisah" : "Update"}
-            </button>
-          </footer>
-        </form>
-      </div>
-    </div>
-  )
-}
-
-// ─── Warist Delete Dialog ─────────────────────────────────────────────────────
-
-function WaristDeleteDialog({ tx, onConfirm, onCancel }: { tx: Tx; onConfirm: () => void; onCancel: () => void }) {
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel() }
-    window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h)
-  }, [onCancel])
-
-  return (
-    <div style={{ position:"fixed", inset:0, zIndex:130, background:"rgba(0,0,0,0.82)", backdropFilter:"blur(4px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
-      <div style={{ background:"#2a2a2a", border:"1px solid rgba(255,185,95,0.3)", borderRadius:12, width:"100%", maxWidth:420, overflow:"hidden" }}>
-        <div style={{ padding:"20px 24px", borderBottom:"1px solid #3c4a42", display:"flex", alignItems:"center", gap:12 }}>
-          <span className="material-symbols-outlined" style={{ color:"#ffb4ab", fontSize:22 }}>warning</span>
-          <h3 style={{ margin:0, fontSize:18, fontWeight:600, color:"#e5e2e1" }}>Hapus Dana Terpisah</h3>
-        </div>
-        <div style={{ padding:"20px 24px" }}>
-          <p style={{ color:"#bbcabf", fontSize:14, lineHeight:1.6, margin:0 }}>
-            Hapus transaksi <strong style={{ color:"#ffb95f" }}>{tx.no}</strong>{" "}
-            ({tx.buyer}, {tx.vol} ekor) senilai{" "}
-            <strong style={{ color:"#ffb95f" }}>{rupiah(tx.jumlah)}</strong>?
-          </p>
-          <div style={{ marginTop:12, padding:"10px 14px", background:"rgba(255,185,95,0.07)", borderRadius:8, border:"1px solid rgba(255,185,95,0.2)", fontSize:12, color:"#86948a" }}>
-            ⚠ Dana terpisah ini tidak akan muncul lagi di log Penjualan Warist setelah dihapus.
-          </div>
-        </div>
-        <div style={{ padding:"16px 24px", borderTop:"1px solid #3c4a42", display:"flex", justifyContent:"flex-end", gap:12 }}>
-          <button onClick={onCancel} style={{ padding:"10px 20px", background:"transparent", border:"1px solid #3c4a42", borderRadius:8, color:"#bbcabf", cursor:"pointer", fontSize:13, fontWeight:700 }}>
-            Batal
-          </button>
-          <button onClick={onConfirm} style={{ padding:"10px 20px", background:"#93000a", border:"none", borderRadius:8, color:"#ffdad6", cursor:"pointer", fontSize:13, fontWeight:700, display:"flex", alignItems:"center", gap:6 }}>
-            <span className="material-symbols-outlined" style={{ fontSize:16 }}>delete</span>Hapus
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -635,55 +469,199 @@ function Toast({ msg, type, onClose }: { msg: string; type: "alert" | "success" 
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-export default function FinanceClient({ initialTransactions }: { initialTransactions: Tx[] }) {
+export default function FinanceClient({
+  initialTransactions,
+  initialInventoryTotal,
+}: {
+  initialTransactions: Tx[]
+  initialInventoryTotal: number
+}) {
   const router = useRouter()
   const mounted = useMounted()
   const [txList, setTxList] = useState<Tx[]>(initialTransactions)
   const [, startTransition] = useTransition()
   const [modalMode, setModalMode] = useState<ModalMode>(null)
-  const [defaultType, setDefaultType] = useState<TxType>("sale")
+  const [defaultType, setDefaultType] = useState<TxType>("expense")
   const [editTx, setEditTx] = useState<Tx | null>(null)
   const [deleteTx, setDeleteTx] = useState<Tx | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: "alert" | "success" | "warning" } | null>(null)
   const [activeNav, setActiveNav] = useState("Finance")
   const [periodeIdx, setPeriodeIdx] = useState(biayaOperasional.length - 1)
-  const [txTab, setTxTab] = useState<"all"|"sale"|"expense"|"warist">("all")
+  const [txTab, setTxTab] = useState<TabType>("income")
 
-  // ── Warist (dana terpisah) state ───────────────────────────────────────────
-  const [waristModal, setWaristModal] = useState<"add"|"edit"|null>(null)
-  const [editWarist, setEditWarist]   = useState<Tx|null>(null)
-  const [deleteWarist, setDeleteWarist] = useState<Tx|null>(null)
+  // Dynamic transaction-based calculations
+  const incomeList = txList.filter(t => t.type === "income")
+  const expenseList = txList.filter(t => t.type === "expense")
+  const investorList = txList.filter(t => t.type === "investor_income")
+  const waristList = txList.filter(t => t.type === "warist")
 
-  // Dynamic transaction-based alerts
-  const sales        = txList.filter(t => t.type === "sale" && t.category !== "Penjualan Warist")
-  const expenses     = txList.filter(t => t.type === "expense")
-  const waristTxList = txList.filter(t => t.category === "Penjualan Warist")
-  const liveMainSale = sales.reduce((a,b) => a + b.jumlah, 0)
-  const liveExpense  = expenses.reduce((a,b) => a + b.jumlah, 0)
-  const liveWarist   = waristTxList.reduce((a,b) => a + b.jumlah, 0)
-  const mainSaleDelta = liveMainSale - seedMainSale
-  const expenseDelta  = liveExpense - seedExpense
-  const waristDelta   = liveWarist - seedWarist
-  const totalSale    = financeSummary.pendapatanTelur + mainSaleDelta
-  const totalExpense = financeSummary.totalKeluar + expenseDelta
-  const totalWarist  = financeSummary.penjualanWarist + waristDelta
-  const kasUtama = financeSummary.sisaSaldo + mainSaleDelta - expenseDelta
-  const combinedBalance = financeSummary.sisaSaldoTotal + mainSaleDelta - expenseDelta + waristDelta
+  const liveIncome = incomeList.reduce((a,b) => a + b.jumlah, 0)
+  const liveExpense = expenseList.reduce((a,b) => a + b.jumlah, 0)
+  const liveInvestor = investorList.reduce((a,b) => a + b.jumlah, 0)
+  const liveWarist = waristList.reduce((a,b) => a + b.jumlah, 0)
+
+  const totalIncome = liveIncome
+  const totalExpense = liveExpense
+  const totalInvestor = liveInvestor
+  const totalWarist = liveWarist
+
+  // Provide dynamic stok data source for income table. By default use static data from livestock; can be mapped to external sheet later.
+  const dynamicStokTelurBulanan: StokTelurBulan[] = deriveDynamicStokTelurBulanan()
+
+  // Compute Penjualan Telur from actual transactions (includes DB + sheet imports)
+  const penjualanTelurValue = txList
+    .filter(t => t.type === "income" && String(t.category).toLowerCase().includes("penjualan telur"))
+    .reduce((sum, t) => sum + (Number(t.jumlah) || 0), 0)
+
+  const dynamicPenjualanBulanan = useMemo(() => {
+    const byMonth = new Map<string, { bulan: string; periode: string; total: number }>()
+
+    incomeList.forEach(tx => {
+      const date = new Date(tx.date)
+      if (Number.isNaN(date.getTime())) return
+
+      const year = date.getFullYear()
+      const month = date.getMonth() + 1
+
+
+      const periode = `${year}-${String(month).padStart(2, "0")}`
+      const bulan = `${date.toLocaleString("id-ID", { month: "short" })} ${String(year).slice(-2)}`
+      const current = byMonth.get(periode)
+
+      byMonth.set(periode, {
+        bulan,
+        periode,
+        total: (current?.total ?? 0) + tx.jumlah,
+      })
+    })
+
+    return Array.from(byMonth.values()).sort((a, b) => a.periode.localeCompare(b.periode))
+  }, [incomeList])
+
+  const dynamicMonthlyFinanceData = useMemo(() => {
+    const byMonth = new Map<string, {
+      bulan: string
+      periode: string
+      penjualan: number
+      pengeluaran: number
+    }>()
+
+    const addMonth = (dateStr: string, amount: number, field: "penjualan" | "pengeluaran") => {
+      const date = new Date(dateStr)
+      if (Number.isNaN(date.getTime())) return
+
+      const year = date.getFullYear()
+      const month = date.getMonth() + 1
+      const periode = `${year}-${String(month).padStart(2, "0")}`
+      const bulan = `${date.toLocaleString("id-ID", { month: "short" })} ${String(year).slice(-2)}`
+      const current = byMonth.get(periode) ?? { bulan, periode, penjualan: 0, pengeluaran: 0 }
+      current[field] += amount
+      byMonth.set(periode, current)
+    }
+
+    expenseList.forEach(tx => addMonth(tx.date, tx.jumlah, "pengeluaran"))
+    incomeList.forEach(tx => addMonth(tx.date, tx.jumlah, "penjualan"))
+
+    const months = Array.from(byMonth.values())
+      .map(item => ({
+        ...item,
+        selisih: item.penjualan - item.pengeluaran,
+      }))
+      .sort((a, b) => a.periode.localeCompare(b.periode))
+
+    return months
+  }, [incomeList, expenseList])
+
+  const dynamicDetailOpsPerBulan = useMemo(() => {
+    type ExpenseCategoryKey = "pakan" | "vaksinVitamin" | "listrik" | "makanRokok" | "gaji" | "kebersihan" | "lainnya"
+
+    const categoryKeyMap: Record<string, ExpenseCategoryKey> = {
+      "Pakan Ayam": "pakan",
+      "Vaksin & Vitamin": "vaksinVitamin",
+      "Listrik & Air": "listrik",
+      "Makan & Rokok": "makanRokok",
+      "Gaji Karyawan": "gaji",
+      "Kebersihan": "kebersihan",
+      "Lain-lain": "lainnya",
+    }
+
+    const byMonth = new Map<string, {
+      bulan: string
+      periode: string
+      pakan: number
+      vaksinVitamin: number
+      listrik: number
+      makanRokok: number
+      gaji: number
+      kebersihan: number
+      lainnya: number
+      total: number
+    }>()
+
+    const ensureMonth = (dateStr: string) => {
+      const date = new Date(dateStr)
+      if (Number.isNaN(date.getTime())) return null
+      const year = date.getFullYear()
+      const month = date.getMonth() + 1
+      const periode = `${year}-${String(month).padStart(2, "0")}`
+      const bulan = `${date.toLocaleString("id-ID", { month: "short" })} ${String(year).slice(-2)}`
+      const existing = byMonth.get(periode)
+      if (existing) return existing
+      const next = {
+        bulan,
+        periode,
+        pakan: 0,
+        vaksinVitamin: 0,
+        listrik: 0,
+        makanRokok: 0,
+        gaji: 0,
+        kebersihan: 0,
+        lainnya: 0,
+        total: 0,
+      }
+      byMonth.set(periode, next)
+      return next
+    }
+
+    expenseList.forEach(tx => {
+      const monthData = ensureMonth(tx.date)
+      if (!monthData) return
+      const field = categoryKeyMap[tx.category] ?? "lainnya"
+      monthData[field] += tx.jumlah
+      monthData.total += tx.jumlah
+    })
+
+    const months = Array.from(byMonth.values()).sort((a, b) => a.periode.localeCompare(b.periode))
+    return months
+  }, [expenseList])
+
+  const totalPemasukanKasUtama = totalIncome + totalInvestor
+  const totalPemasukan = totalPemasukanKasUtama + totalWarist
+  const totalInventory = initialInventoryTotal
+  const totalExpenseOps = totalExpense + totalInventory
+  const kasUtama = totalPemasukanKasUtama - totalExpenseOps
+  const kasWarist = totalWarist
+  const totalMasuk = totalPemasukan
+  const totalKeluar = totalExpenseOps
+  const combinedBalance = totalMasuk - totalKeluar
+  
   const balanceStatus = combinedBalance > 0 ? "Plus" : combinedBalance < 0 ? "Minus" : "Netral"
   const balanceColor = combinedBalance > 0 ? "#4edea3" : combinedBalance < 0 ? "#ffb4ab" : "#ffb95f"
   const balanceBg = combinedBalance > 0 ? "rgba(78,222,163,0.08)" : combinedBalance < 0 ? "rgba(255,180,171,0.08)" : "rgba(255,185,95,0.08)"
   const balanceBorder = combinedBalance > 0 ? "rgba(78,222,163,0.35)" : combinedBalance < 0 ? "rgba(255,180,171,0.35)" : "rgba(255,185,95,0.35)"
   const balanceIcon = combinedBalance > 0 ? "check_circle" : combinedBalance < 0 ? "report_problem" : "info"
-  const lastMonthTotal = penjualanBulanan[penjualanBulanan.length - 1]?.total ?? 0
+  
+  const lastMonthTotal = dynamicPenjualanBulanan[dynamicPenjualanBulanan.length - 1]?.total ?? 0
   const gaugePct = Math.min((lastMonthTotal / 25_000_000) * 100, 100)
   const periode  = biayaOperasional[periodeIdx]
+  const operationalExpenseCurrent = periode.total
   const totalOps = biayaOperasional.reduce((a,b) => a + b.total, 0)
 
   const generateFinanceAlert = useCallback(() => {
     if (combinedBalance < 0) {
       return {
-        title: "Saldo gabungan negatif",
-        desc: `Kas utama ${rupiah(kasUtama)}, warist ${rupiah(totalWarist)}`,
+        title: "⚠️ Saldo negatif",
+        desc: `Total pemasukan: ${rupiah(totalPemasukan, true)} — Biaya operasional ${periode.bulan}: ${rupiah(operationalExpenseCurrent, true)}`,
         type: "error" as const,
         priority: 1,
       }
@@ -691,41 +669,47 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
 
     if (combinedBalance === 0) {
       return {
-        title: "Saldo gabungan netral",
-        desc: `Kas utama ${rupiah(kasUtama)}, warist ${rupiah(totalWarist)}`,
+        title: "⚡ Saldo seimbang",
+        desc: `Saldo total = total pemasukan (termasuk dana terpisah) - biaya operasional periode ${periode.bulan}`,
         type: "warning" as const,
         priority: 2,
       }
     }
 
-    return {
-      title: "Saldo gabungan positif",
-      desc: `Kas utama ${rupiah(kasUtama)}, warist ${rupiah(totalWarist)}`,
-      type: "success" as const,
-      priority: 3,
+    if (kasUtama > 0) {
+      return {
+        title: "✓ Saldo sehat",
+        desc: `Kas utama mencukupi biaya operasional ${periode.bulan}: ${rupiah(operationalExpenseCurrent, true)}`,
+        type: "success" as const,
+        priority: 3,
+      }
     }
-  }, [combinedBalance, kasUtama, totalWarist])
+
+    return {
+      title: "⚡ Kas utama negatif",
+      desc: `Saldo total positif berkat dana terpisah, tetapi kas utama belum menutupi biaya operasional ${periode.bulan}`,
+      type: "warning" as const,
+      priority: 2,
+    }
+  }, [combinedBalance, kasUtama, kasWarist, operationalExpenseCurrent, totalPemasukan, periode.bulan])
 
   // Auto-show financial alert when transaction data changes
   useEffect(() => {
     const alert = generateFinanceAlert()
-    const icon = alert.type === "error" ? "⚠️" : alert.type === "warning" ? "⚡" : "✓"
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setToast({
-      msg: `${icon} Saldo Total: ${rupiah(combinedBalance)}`,
+      msg: `${alert.title} · Total: ${rupiah(combinedBalance)}`,
       type: alert.type === "error" ? "alert" : (alert.type as "success" | "warning"),
     })
   }, [generateFinanceAlert, combinedBalance])
 
-
   const showToast = useCallback((msg: string, type: "success"|"error" = "success") => {
-    // Transaction action toast (kept for CRUD feedback)
     setToast({ msg, type: type === "success" ? "success" : "alert" })
   }, [])
 
   // ── CRUD handlers ──────────────────────────────────────────────────────────
 
-  function openAdd(type: TxType = "sale") {
+  function openAdd(type: TxType = "expense") {
     setDefaultType(type); setEditTx(null); setModalMode("add")
   }
   function openEdit(tx: Tx) {
@@ -742,10 +726,10 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
         const savedTx = await saveFinanceTransactionAction(id, data)
         if (modalMode === "add") {
           setTxList(prev => [savedTx, ...prev])
-          showToast(`Transaksi ${savedTx.no} berhasil disimpan.`)
+          showToast(`${savedTx.no} berhasil disimpan.`)
         } else if (modalMode === "edit" && editTx) {
           setTxList(prev => prev.map(t => t.id === editTx.id ? savedTx : t))
-          showToast(`Transaksi ${savedTx.no} berhasil diperbarui.`)
+          showToast(`${savedTx.no} berhasil diperbarui.`)
         }
         closeModal()
         router.refresh()
@@ -762,7 +746,7 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
       try {
         await deleteFinanceTransactionAction(tx.id)
         setTxList(prev => prev.filter(t => t.id !== tx.id))
-        showToast(`Transaksi ${tx.no} dihapus.`, "error")
+        showToast(`${tx.no} dihapus.`, "error")
         setDeleteTx(null)
         router.refresh()
       } catch (error) {
@@ -771,56 +755,7 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
     })
   }
 
-  // ── Warist CRUD ────────────────────────────────────────────────────────────
-  function openAddWarist() { setEditWarist(null); setWaristModal("add") }
-  function openEditWarist(tx: Tx) { setEditWarist(tx); setWaristModal("edit") }
-
-  function handleSaveWarist(data: Omit<Tx,"id"|"no">) {
-    const enriched = { ...data, category:"Penjualan Warist" }
-    const id = waristModal === "edit" ? editWarist?.id ?? null : null
-    startTransition(async () => {
-      try {
-        const savedTx = await saveFinanceTransactionAction(id, enriched)
-        if (waristModal === "add") {
-          setTxList(prev => [savedTx, ...prev])
-          showToast(`${savedTx.no} berhasil disimpan.`)
-        } else if (editWarist) {
-          setTxList(prev => prev.map(t => t.id===editWarist.id ? savedTx : t))
-          showToast(`${savedTx.no} berhasil diperbarui.`)
-        }
-        setWaristModal(null); setEditWarist(null)
-        router.refresh()
-      } catch (error) {
-        showToast(error instanceof Error ? error.message : "Gagal menyimpan dana terpisah.", "error")
-      }
-    })
-  }
-
-  function handleDeleteWarist() {
-    if (!deleteWarist) return
-    const tx = deleteWarist
-    startTransition(async () => {
-      try {
-        await deleteFinanceTransactionAction(tx.id)
-        setTxList(prev => prev.filter(t => t.id !== tx.id))
-        showToast(`${tx.no} dihapus.`, "error")
-        setDeleteWarist(null)
-        router.refresh()
-      } catch (error) {
-        showToast(error instanceof Error ? error.message : "Gagal menghapus dana terpisah.", "error")
-      }
-    })
-  }
-
-  const filteredTx = txList.filter(t => {
-    const matchesTab = txTab === "all"
-      ? true
-      : txTab === "warist"
-      ? t.category === "Penjualan Warist"
-      : t.type === txTab && t.category !== "Penjualan Warist"
-
-    return matchesTab
-  })
+  const filteredTx = txList.filter(t => t.type === txTab)
 
   return (
     <>
@@ -904,9 +839,9 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                 </p>
               </div>
               <div style={{ display:"flex", gap:12 }}>
-                <button onClick={() => openAdd("sale")} style={{ background:"#4edea3", color:"#003824", padding:"12px 24px", fontWeight:600, borderRadius:8, border:"none", cursor:"pointer", display:"flex", alignItems:"center", gap:8, fontSize:14 }}>
-                  <span className="material-symbols-outlined" style={{ fontSize:20 }}>add_shopping_cart</span>
-                  New Sale
+                <button onClick={() => openAdd("income")} style={{ background:"#4edea3", color:"#003824", padding:"12px 24px", fontWeight:600, borderRadius:8, border:"none", cursor:"pointer", display:"flex", alignItems:"center", gap:8, fontSize:14 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize:20 }}>trending_up</span>
+                  Tambah Pemasukan
                 </button>
                 <button onClick={() => openAdd("expense")} style={{ background:"#2a2a2a", color:"#e5e2e1", padding:"12px 24px", fontWeight:600, borderRadius:8, border:"1px solid #2e2e2e", cursor:"pointer", display:"flex", alignItems:"center", gap:8, fontSize:14, transition:"border-color 0.15s" }}
                   onMouseEnter={e => (e.currentTarget.style.borderColor = "#4edea3")}
@@ -941,17 +876,19 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                       <Gauge pct={gaugePct}/>
                       <div style={{ marginTop:16, textAlign:"center" }}>
                         <div style={{ fontSize:20, fontWeight:700, color:"#4edea3" }}>
-                          {mounted ? rupiah(totalSale) : "—"}
+                          {mounted ? rupiah(totalPemasukan) : "—"}
                         </div>
-                        <div style={{ fontSize:13, color:"#bbcabf", marginTop:2 }}>Total Pendapatan (live)</div>
+                        <div style={{ fontSize:13, color:"#bbcabf", marginTop:2 }}>Total Pemasukan</div>
                       </div>
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
                       {[
-                        { label:"Total Penjualan (Kas Utama)", val: mounted ? rupiah(totalSale)                       : "—", border:"#4edea3" },
-                        { label:"Total Pengeluaran Ops",       val: mounted ? rupiah(totalExpense)                    : "—", border:"#ffb95f" },
-                        { label:"Saldo Kas Utama",             val: mounted ? rupiah(kasUtama)                        : "—", border: mounted && kasUtama >= 0 ? "#4edea3":"#ffb4ab" },
-                        { label:"Saldo Gabungan",              val: mounted ? rupiah(combinedBalance)                 : "—", border: mounted && combinedBalance >= 0 ? "#4edea3":"#ffb4ab" },
+                        { label:"Total Pemasukan (Kas Utama)", val: mounted ? rupiah(totalPemasukanKasUtama) : "—", border:"#4edea3" },
+                        { label:"Total Pengeluaran Ops",       val: mounted ? rupiah(totalExpenseOps)                 : "—", border:"#ffb95f" },
+                        { label:"Pengeluaran Transaksi",        val: mounted ? rupiah(totalExpense)                    : "—", border:"#ff8a80" },
+                        { label:"Total Inventory",              val: mounted ? rupiah(totalInventory)                  : "—", border:"#89ceff" },
+                        { label:"Penjualan Telur",              val: mounted ? rupiah(penjualanTelurValue)             : "—", border:"#4edea3" },
+                        { label:"Investasi",                    val: mounted ? rupiah(totalInvestor)                  : "—", border:"#a78bfa" },
                       ].map((item,i) => (
                         <div key={i} style={{ background:"#1c1b1b", padding:16, borderRadius:6, borderLeft:`4px solid ${item.border}` }}>
                           <div style={{ fontSize:11, fontWeight:700, color:"#bbcabf", textTransform:"uppercase", letterSpacing:"0.04em" }}>{item.label}</div>
@@ -968,7 +905,7 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                           {mounted ? rupiah(totalWarist) : "—"}
                         </div>
                         <div style={{ fontSize:11, color:"#86948a", marginTop:4 }}>
-                          {mounted ? `${waristTxList.reduce((a,b) => a + b.vol, 0)} ekor ayam afkir · dana terpisah` : "ekor ayam afkir · dana terpisah"}
+                          {mounted ? `${waristList.reduce((a: number, b: Tx) => a + b.vol, 0)} ekor ayam afkir · dana terpisah` : "ekor ayam afkir · dana terpisah"}
                         </div>
                       </div>
                     </div>
@@ -979,13 +916,13 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                 <div className="industrial-card" style={{ padding:24 }}>
                   <h3 style={{ fontSize:16, fontWeight:600, color:"#e5e2e1", margin:"0 0 20px" }}>Pendapatan per Bulan</h3>
                   <ResponsiveContainer width="100%" height={160}>
-                    <BarChart data={penjualanBulanan} margin={{ top:4, right:0, left:-15, bottom:0 }}>
+                    <BarChart data={dynamicPenjualanBulanan} margin={{ top:4, right:0, left:-15, bottom:0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false}/>
                       <XAxis dataKey="bulan" tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false}/>
                       <YAxis tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false} tickFormatter={v => rupiah(v,true)}/>
                       <Tooltip content={<DarkTip/>} cursor={{ fill:"rgba(78,222,163,0.05)" }}/>
                       <Bar dataKey="total" name="Pendapatan" radius={[4,4,0,0]}>
-                        {penjualanBulanan.map((d,i) => (
+                        {dynamicPenjualanBulanan.map((d,i) => (
                           <Cell key={i} fill={d.total>=20_000_000?"#4edea3":d.total>=10_000_000?"#89ceff":"#ffb95f"} fillOpacity={0.85}/>
                         ))}
                       </Bar>
@@ -996,104 +933,121 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                 {/* ── Transactions Table with CRUD ── */}
                 <div className="industrial-card" style={{ overflow:"hidden" }}>
                   {/* Table toolbar */}
-                  <div style={{ padding:"0 24px", borderBottom:"1px solid #3c4a42", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                    <div style={{ display:"flex" }}>
+                  <div style={{ padding:"0 16px", borderBottom:"1px solid #3c4a42", display:"flex", alignItems:"center", justifyContent:"space-between", overflowX:"auto" }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:2 }}>
                       {([
-                        ["all","Semua"],
-                        ["sale","Penjualan"],
-                        ["expense","Pengeluaran"],
-                        ["warist","Dana Terpisah"],
-                      ] as const).map(([val,lbl]) => (
+                        ["income", "Pemasukan", "trending_up", "#4edea3"],
+                        ["expense", "Pengeluaran", "trending_down", "#ffb95f"],
+                        ["investor_income", "Investasi", "account_balance", "#a78bfa"],
+                        ["warist", "Dana Terpisah", "star", "#fbbf24"],
+                      ] as const).map(([val, lbl, icon, color]) => (
                         <button key={val} onClick={() => setTxTab(val)} style={{
-                          padding:"14px 16px", background:"transparent", border:"none",
-                          borderBottom:`2px solid ${txTab===val ? (val==="warist"?"#ffb95f":"#4edea3") : "transparent"}`,
-                          color: txTab===val ? (val==="warist"?"#ffb95f":"#4edea3") : "#bbcabf",
-                          fontWeight: txTab===val ? 700 : 400, cursor:"pointer", fontSize:13, transition:"all 0.15s",
-                          display:"flex", alignItems:"center", gap:6,
+                          padding:"12px 14px", background:"transparent", border:"none",
+                          borderBottom:`2px solid ${txTab===val ? color : "transparent"}`,
+                          color: txTab===val ? color : "#bbcabf",
+                          fontWeight: txTab===val ? 600 : 400, cursor:"pointer", fontSize:12, transition:"all 0.15s",
+                          display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap",
                         }}>
-                          {val==="warist" && <span className="material-symbols-outlined" style={{ fontSize:14 }}>star</span>}
+                          <span className="material-symbols-outlined" style={{ fontSize:16, color }}>{icon}</span>
                           {lbl}
-                          {val==="warist" && waristTxList.length > 0 && (
-                            <span style={{ fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:20, background:"rgba(255,185,95,0.15)", color:"#ffb95f" }}>
-                              {waristTxList.length}
-                            </span>
-                          )}
+                          {(() => {
+                            const count = txList.filter(t => t.type === val).length
+                            return count > 0 ? (
+                              <span style={{ fontSize:10, fontWeight:700, padding:"2px 6px", borderRadius:12, background:`${color}20`, color }}>
+                                {count}
+                              </span>
+                            ) : null
+                          })()}
                         </button>
                       ))}
                     </div>
-                    <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                      {txTab === "warist" && (
-                        <button onClick={openAddWarist} style={{ background:"rgba(255,185,95,0.15)", color:"#ffb95f", padding:"6px 12px", fontSize:11, fontWeight:700, borderRadius:6, border:"1px solid rgba(255,185,95,0.35)", cursor:"pointer", display:"flex", alignItems:"center", gap:6 }}>
-                          <span className="material-symbols-outlined" style={{ fontSize:16 }}>add</span>Dana Terpisah
-                        </button>
-                      )}
+                    <div style={{ display:"flex", gap:8, alignItems:"center", flexShrink:0 }}>
+                      <button 
+                        onClick={() => openAdd(txTab)} 
+                        style={{ background:`${txTab === "income" ? "#4edea3" : txTab === "expense" ? "#ffb95f" : txTab === "investor_income" ? "#a78bfa" : "#fbbf24"}15`, color: txTab === "income" ? "#4edea3" : txTab === "expense" ? "#ffb95f" : txTab === "investor_income" ? "#a78bfa" : "#fbbf24", padding:"6px 12px", fontSize:11, fontWeight:700, borderRadius:6, border:`1px solid ${txTab === "income" ? "#4edea3" : txTab === "expense" ? "#ffb95f" : txTab === "investor_income" ? "#a78bfa" : "#fbbf24"}35`, cursor:"pointer", display:"flex", alignItems:"center", gap:6, transition:"all 0.15s", whiteSpace:"nowrap" }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.8" }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "1" }}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize:16 }}>add</span>
+                        {txTab === "income" ? "Tambah Pemasukan" : txTab === "expense" ? "Tambah Pengeluaran" : txTab === "investor_income" ? "Tambah Investasi" : "Tambah Dana"}
+                      </button>
                     </div>
                   </div>
 
                   <div style={{ overflowX:"auto" }}>
-                    <table style={{ width:"100%", borderCollapse:"collapse", textAlign:"left" }}>
+                      <table style={{ width:"100%", borderCollapse:"collapse", textAlign:"left" }}>
                       <thead style={{ background:"#1E1E1E" }}>
                         <tr>
                           <th style={{ padding:"12px 24px", width:40 }}><input type="checkbox"/></th>
-                          {["No. TX","Tipe","Pembeli / Vendor","Volume","Jumlah (Rp)","Aksi"].map((h,i) => (
-                            <th key={h} style={{ padding:"12px 24px", fontSize:11, fontWeight:700, color:"#bbcabf", textTransform:"uppercase", letterSpacing:"0.05em", textAlign: i>=3 && i<=4 ? "right" : i===5 ? "center" : "left" }}>{h}</th>
-                          ))}
+                          {
+                            (txTab === "income"
+                              ? ["Tanggal", "Item", "Qty", "Harga (Rp)", "Subtotal (Rp)", "Stok Telur (kg)", "Telur Terjual (kg)", "Sisa Telur (kg)", "Aksi"]
+                              : ["Tanggal", "Item", "Qty", "Harga (Rp)", "Subtotal (Rp)", "Aksi"]
+                            ).map((h,i,headers) => {
+                              const isLast = i === headers.length - 1
+                              const textAlign = isLast ? "center" : i === 0 || i === 1 ? "left" : "right"
+                              return (
+                                <th key={h} style={{ padding:"12px 24px", fontSize:11, fontWeight:700, color:"#bbcabf", textTransform:"uppercase", letterSpacing:"0.05em", textAlign }}>{h}</th>
+                              )
+                            })
+                          }
                         </tr>
                       </thead>
                       <tbody>
                         {filteredTx.length === 0 && (
-                          <tr><td colSpan={7} style={{ padding:"32px 24px", textAlign:"center", color:"#bbcabf", fontSize:14 }}>
-            Belum ada transaksi. Klik {"\"Sale\""} atau {"\"Expense\""} untuk menambah.
+                          <tr><td colSpan={txTab === "income" ? 10 : 7} style={{ padding:"32px 24px", textAlign:"center", color:"#bbcabf", fontSize:14 }}>
+                            {txTab === "income" && "Belum ada data pemasukan. Klik tombol \"Tambah Pemasukan\" untuk menambahkan."}
+                            {txTab === "expense" && "Belum ada data pengeluaran. Klik tombol \"Tambah Pengeluaran\" untuk menambahkan."}
+                            {txTab === "investor_income" && "Belum ada data investasi. Klik tombol \"Tambah Investasi\" untuk menambahkan."}
+                            {txTab === "warist" && "Belum ada data dana terpisah. Klik tombol \"Tambah Dana\" untuk menambahkan."}
                           </td></tr>
                         )}
-                        {filteredTx.map((tx) => {
-                          const isWarist = tx.category === "Penjualan Warist"
-                          const badgeBg    = isWarist ? "rgba(255,185,95,0.18)"  : tx.type==="sale" ? "rgba(78,222,163,0.12)"  : "rgba(255,185,95,0.12)"
-                          const badgeColor = isWarist ? "#ffb95f"                 : tx.type==="sale" ? "#4edea3"                 : "#ffb95f"
-                          const badgeLabel = isWarist ? "WARIST"                  : tx.type==="sale" ? "JUAL"                    : "KELUAR"
+                        {filteredTx.map((tx, index) => {
+                          const qty = tx.vol || 0
+                          const harga = tx.harga ?? (qty > 0 ? Math.round(tx.jumlah / qty) : tx.jumlah)
+                          const subtotal = tx.jumlah
                           return (
-                          <tr key={tx.id} className="tx-row" style={{ background: isWarist ? "rgba(255,185,95,0.03)" : "transparent" }}>
+                          <tr key={`${tx.type}-${tx.id}-${index}`} className="tx-row">
                             <td style={{ padding:"13px 24px" }}><input type="checkbox"/></td>
-                            <td style={{ padding:"13px 24px", fontSize:13, fontWeight:500, fontVariantNumeric:"tabular-nums" }}>
-                              <span style={{ color: isWarist ? "#ffb95f" : "#bbcabf" }}>{tx.no}</span>
-                              {isWarist && (
-                                <span className="material-symbols-outlined" style={{ fontSize:14, color:"#ffb95f", marginLeft:6, verticalAlign:"middle" }} title="Dana terpisah">star</span>
-                              )}
+                            <td style={{ padding:"13px 24px", fontSize:13, color:"#bbcabf" }}>{tx.date}</td>
+                            <td style={{ padding:"13px 24px", fontSize:13, color:"#e5e2e1" }}>{tx.buyer || tx.category}</td>
+                            <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13, color:"#bbcabf" }}>{qty || "-"}</td>
+                            <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13, color:"#bbcabf", fontVariantNumeric:"tabular-nums" }}>
+                              {harga.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
                             </td>
-                            <td style={{ padding:"13px 24px" }}>
-                              <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                                <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, background:badgeBg, color:badgeColor, flexShrink:0 }}>
-                                  {badgeLabel}
-                                </span>
-                                <span style={{ color: isWarist ? "#ffb95f" : "#e5e2e1" }}>
-                                  {tx.buyer || tx.category}
-                                </span>
-                                {isWarist && (
-                                  <span style={{ fontSize:10, color:"#86948a", fontStyle:"italic" }}>· dana terpisah</span>
-                                )}
-                              </div>
-                              {isWarist && tx.notes && (
-                                <div style={{ fontSize:11, color:"#86948a", marginTop:3, paddingLeft:4 }}>{tx.notes}</div>
-                              )}
+                            <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13, fontWeight:600, color:"#4edea3", fontVariantNumeric:"tabular-nums" }}>
+                              {subtotal.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
                             </td>
-                            <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13 }}>
-                              {isWarist ? `${tx.vol} ekor` : tx.vol > 0 ? `${tx.vol} kg` : "—"}
-                            </td>
-                            <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13, fontWeight:600, color: isWarist ? "#ffb95f" : "#e5e2e1" }}>
-                              {Math.round(tx.jumlah).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
-                            </td>
+                            {/* Stock columns only apply to egg sales from expense.xlsx. */}
+                            {txTab === "income" && (() => {
+                              const d = new Date(tx.date)
+                              const year = d.getFullYear()
+                              const month = String(d.getMonth() + 1).padStart(2, "0")
+                              const periode = `${year}-${month}`
+                              const stokEntry = dynamicStokTelurBulanan.find((s: StokTelurBulan) => s.periode === periode)
+                              const stockValue = tx.stock ?? stokEntry?.stokKg
+                              const terjualValue = tx.vol || stokEntry?.terjualKg
+                              const sisaValue = tx.sisa ?? stokEntry?.sisaKg
+                              return (
+                                <>
+                                  <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13, color:"#4edea3" }}>{stockValue != null ? stockValue.toFixed(1) : "-"}</td>
+                                  <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13, color:"#89ceff" }}>{terjualValue != null ? terjualValue.toFixed(1) : "-"}</td>
+                                  <td style={{ padding:"13px 24px", textAlign:"right", fontSize:13, color:"#ffb95f" }}>{sisaValue != null ? sisaValue.toFixed(1) : "-"}</td>
+                                </>
+                              )
+                            })()}
                             <td style={{ padding:"13px 24px", textAlign:"center" }}>
                               <div style={{ display:"flex", justifyContent:"center", gap:12 }}>
-                                <button
-                                  onClick={() => isWarist ? openEditWarist(tx) : openEdit(tx)}
+                                <button type="button"
+                                  onClick={() => openEdit(tx)}
                                   style={{ background:"transparent", border:"none", color:"#bbcabf", cursor:"pointer", lineHeight:0, transition:"color 0.15s" }}
-                                  onMouseEnter={e => (e.currentTarget.style.color = isWarist ? "#ffb95f" : "#4edea3")}
+                                  onMouseEnter={e => (e.currentTarget.style.color = "#4edea3")}
                                   onMouseLeave={e => (e.currentTarget.style.color = "#bbcabf")}
                                   title="Edit">
                                   <span className="material-symbols-outlined" style={{ fontSize:20 }}>edit</span>
                                 </button>
-                                <button
-                                  onClick={() => isWarist ? setDeleteWarist(tx) : setDeleteTx(tx)}
+                                <button type="button"
+                                  onClick={() => setDeleteTx(tx)}
                                   style={{ background:"transparent", border:"none", color:"#bbcabf", cursor:"pointer", lineHeight:0, transition:"color 0.15s" }}
                                   onMouseEnter={e => (e.currentTarget.style.color = "#ffb4ab")}
                                   onMouseLeave={e => (e.currentTarget.style.color = "#bbcabf")}
@@ -1111,8 +1065,8 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
 
                   {/* Summary footer */}
                   <div style={{ padding:"12px 24px", background:"#1c1b1b", borderTop:"1px solid #3c4a42", display:"flex", justifyContent:"space-between", fontSize:12 }}>
-                    <span style={{ color:"#bbcabf" }}>{filteredTx.length} transaksi ditampilkan</span>
-                    <span style={{ color:"#4edea3", fontWeight:700 }}>
+                    <span style={{ color:"#bbcabf" }}>{filteredTx.length} {txTab === "income" ? "pemasukan" : txTab === "expense" ? "pengeluaran" : txTab === "investor_income" ? "investasi" : "dana terpisah"} ditampilkan</span>
+                    <span style={{ color: txTab === "income" ? "#4edea3" : txTab === "expense" ? "#ffb95f" : txTab === "investor_income" ? "#a78bfa" : "#fbbf24", fontWeight:700 }}>
                       Total: {mounted ? rupiah(filteredTx.reduce((a,b) => a+b.jumlah, 0)) : "—"}
                     </span>
                   </div>
@@ -1215,7 +1169,7 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                 <div>
                   <h3 style={{ fontSize:22, fontWeight:700, color:"#e5e2e1", margin:0, letterSpacing:"-0.01em" }}>Penjualan & Pengeluaran per Bulan</h3>
-                  <p style={{ fontSize:13, color:"#bbcabf", marginTop:4 }}>Data aktual dari sheet HITUNGAN · Feb 2025 – Mei 2026</p>
+                  <p style={{ fontSize:13, color:"#bbcabf", marginTop:4 }}>Data aktual live dari transaksi · Otomatis mengikuti data terbaru</p>
                 </div>
                 <div style={{ display:"flex", gap:16, fontSize:12 }}>
                   {[["#4edea3","Penjualan"],["#ff8a80","Pengeluaran"],["#89ceff","Selisih (net)"]].map(([c,l])=>(
@@ -1242,11 +1196,11 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                   </div>
                   <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4 }}>
                     <span style={{ fontSize:11, fontWeight:700, color:"#bbcabf", textTransform:"uppercase" }}>Total Pendapatan</span>
-                    <span style={{ fontSize:18, fontWeight:700, color:"#4edea3" }}>{rupiah(dataBulananKeuangan.reduce((a,b)=>a+b.penjualan,0), true)}</span>
+                    <span style={{ fontSize:18, fontWeight:700, color:"#4edea3" }}>{rupiah(dynamicMonthlyFinanceData.reduce((a,b)=>a+b.penjualan,0), true)}</span>
                   </div>
                 </div>
                 <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={dataBulananKeuangan} margin={{ top:4, right:8, left:-8, bottom:0 }} barGap={4}>
+                  <ComposedChart data={dynamicMonthlyFinanceData} margin={{ top:4, right:8, left:-8, bottom:0 }} barGap={4}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false}/>
                     <XAxis dataKey="bulan" tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false}/>
                     <YAxis tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false} tickFormatter={v=>rupiah(v,true)} width={72}/>
@@ -1254,7 +1208,7 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       content={({ active, payload, label }: any) => {
                         if (!active || !payload?.length) return null
-                        const d = dataBulananKeuangan.find(x=>x.bulan===label)
+                        const d = dynamicMonthlyFinanceData.find(x=>x.bulan===label)
                         return (
                           <div style={{ background:"#201f1f", border:"1px solid #3c4a42", borderRadius:8, padding:"10px 14px", fontSize:12, minWidth:190 }}>
                             <p style={{ color:"#bbcabf", marginBottom:8, fontWeight:700 }}>{label}</p>
@@ -1273,12 +1227,12 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                       }}
                     />
                     <Bar dataKey="penjualan" name="Penjualan" radius={[3,3,0,0]} maxBarSize={28}>
-                      {dataBulananKeuangan.map((_,i)=>(
+                      {dynamicMonthlyFinanceData.map((_,i)=>(
                         <Cell key={i} fill="#4edea3" fillOpacity={0.85}/>
                       ))}
                     </Bar>
                     <Bar dataKey="pengeluaran" name="Pengeluaran" radius={[3,3,0,0]} maxBarSize={28}>
-                      {dataBulananKeuangan.map((_,i)=>(
+                      {dynamicMonthlyFinanceData.map((_,i)=>(
                         <Cell key={i} fill="#ff8a80" fillOpacity={0.75}/>
                       ))}
                     </Bar>
@@ -1290,10 +1244,10 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                 {/* KPI summary row */}
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginTop:20, paddingTop:16, borderTop:"1px solid #2e2e2e" }}>
                   {[
-                    { label:"Bulan Untung",  val:`${dataBulananKeuangan.filter(d=>d.selisih>0).length} bulan`, color:"#4edea3", icon:"trending_up" },
-                    { label:"Bulan Rugi",    val:`${dataBulananKeuangan.filter(d=>d.selisih<=0).length} bulan`, color:"#ff8a80", icon:"trending_down" },
-                    { label:"Pengeluaran Tertinggi", val:rupiah(Math.max(...dataBulananKeuangan.map(d=>d.pengeluaran)),true), color:"#ffb95f", icon:"arrow_upward" },
-                    { label:"Pendapatan Tertinggi",  val:rupiah(Math.max(...dataBulananKeuangan.map(d=>d.penjualan)),true),   color:"#4edea3", icon:"star" },
+                    { label:"Bulan Untung",  val:`${dynamicMonthlyFinanceData.filter(d=>d.selisih>0).length} bulan`, color:"#4edea3", icon:"trending_up" },
+                    { label:"Bulan Rugi",    val:`${dynamicMonthlyFinanceData.filter(d=>d.selisih<=0).length} bulan`, color:"#ff8a80", icon:"trending_down" },
+                    { label:"Pengeluaran Tertinggi", val:rupiah(Math.max(...dynamicMonthlyFinanceData.map(d=>d.pengeluaran)),true), color:"#ffb95f", icon:"arrow_upward" },
+                    { label:"Pendapatan Tertinggi",  val:rupiah(Math.max(...dynamicMonthlyFinanceData.map(d=>d.penjualan)),true),   color:"#4edea3", icon:"star" },
                   ].map((k,i)=>(
                     <div key={i} style={{ background:"#1c1b1b", borderRadius:8, padding:"12px 14px", borderLeft:`3px solid ${k.color}` }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6 }}>
@@ -1318,7 +1272,7 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                   </div>
                 </div>
                 <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={detailOpsPerBulan} margin={{ top:4, right:8, left:-8, bottom:0 }}>
+                  <BarChart data={dynamicDetailOpsPerBulan} margin={{ top:4, right:8, left:-8, bottom:0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false}/>
                     <XAxis dataKey="bulan" tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false}/>
                     <YAxis tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false} tickFormatter={v=>rupiah(v,true)} width={72}/>
@@ -1326,7 +1280,7 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       content={({ active, payload, label }: any) => {
                         if (!active || !payload?.length) return null
-                        const d = detailOpsPerBulan.find(x=>x.bulan===label)
+                        const d = dynamicDetailOpsPerBulan.find(x=>x.bulan===label)
                         const cats = [
                           ["Pakan",          d?.pakan??0,         "#ffb95f"],
                           ["Vaksin/Vit",      d?.vaksinVitamin??0, "#89ceff"],
@@ -1407,23 +1361,6 @@ export default function FinanceClient({ initialTransactions }: { initialTransact
           tx={deleteTx}
           onConfirm={handleDelete}
           onCancel={() => setDeleteTx(null)}
-        />
-      )}
-
-      {/* ── Warist Modals ── */}
-      {waristModal && (
-        <WaristModal
-          mode={waristModal}
-          initial={editWarist ?? {}}
-          onSave={handleSaveWarist}
-          onClose={() => { setWaristModal(null); setEditWarist(null) }}
-        />
-      )}
-      {deleteWarist && (
-        <WaristDeleteDialog
-          tx={deleteWarist}
-          onConfirm={handleDeleteWarist}
-          onCancel={() => setDeleteWarist(null)}
         />
       )}
 

@@ -7,12 +7,16 @@ import { inventoryItems, type InventoryItem } from "@/data/inventory"
 
 config({ path: resolve(process.cwd(), ".env.local"), quiet: true })
 
+function quotePgIdentifier(value: string) {
+  return `"${value.replace(/"/g, '""')}"`
+}
+
 async function ensureInventoryTable(pool: Pool) {
   await pool.query(`
     create table if not exists inventory_items (
       id text primary key,
       nama text not null,
-      kategori text not null check (kategori in ('Feed', 'Medical', 'Parts', 'Cleaning', 'Utility')),
+      kategori text not null check (kategori in ('Konstruksi', 'Utilitas', 'SDM')),
       stok integer not null check (stok >= 0),
       satuan text not null,
       kapasitas integer not null check (kapasitas > 0),
@@ -23,15 +27,33 @@ async function ensureInventoryTable(pool: Pool) {
       updated_at timestamptz not null default now()
     )
   `)
+
+  const { rows } = await pool.query<{ conname: string }>(`
+    select conname
+    from pg_constraint
+    where conrelid = 'inventory_items'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%kategori%'
+  `)
+
+  for (const row of rows) {
+    await pool.query(`alter table inventory_items drop constraint if exists ${quotePgIdentifier(row.conname)}`)
+  }
+
+  await pool.query("delete from inventory_items where kategori not in ('Konstruksi', 'Utilitas', 'SDM')")
+
+  await pool.query(`
+    alter table inventory_items
+    add constraint inventory_items_kategori_check
+    check (kategori in ('Konstruksi', 'Utilitas', 'SDM'))
+  `)
 }
 
-async function seedInventoryIfEmpty(pool: Pool) {
-  const { rows } = await pool.query<{ count: string }>("select count(*) from inventory_items")
-  if (Number(rows[0]?.count ?? 0) > 0) return
-
+async function syncInventoryDataset(pool: Pool) {
   const client = await pool.connect()
   try {
     await client.query("begin")
+    await client.query("delete from inventory_items")
     for (const item of inventoryItems) {
       await client.query(
         `insert into inventory_items (id, nama, kategori, stok, satuan, kapasitas, harga_satuan, terakhir_restock, keterangan)
@@ -49,11 +71,17 @@ async function seedInventoryIfEmpty(pool: Pool) {
 }
 
 function ensureSqliteInventoryTable(db: Database.Database) {
+  const existing = db.prepare("select sql from sqlite_master where type = 'table' and name = 'inventory_items'").get() as { sql: string } | undefined
+
+  if (existing && !existing.sql.includes("'Konstruksi'")) {
+    db.exec("DROP TABLE inventory_items")
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS inventory_items (
       id TEXT PRIMARY KEY,
       nama TEXT NOT NULL,
-      kategori TEXT NOT NULL CHECK (kategori IN ('Feed', 'Medical', 'Parts', 'Cleaning', 'Utility')),
+      kategori TEXT NOT NULL CHECK (kategori IN ('Konstruksi', 'Utilitas', 'SDM')),
       stok INTEGER NOT NULL CHECK (stok >= 0),
       satuan TEXT NOT NULL,
       kapasitas INTEGER NOT NULL CHECK (kapasitas > 0),
@@ -66,15 +94,13 @@ function ensureSqliteInventoryTable(db: Database.Database) {
   `)
 }
 
-function seedSqliteInventoryIfEmpty(db: Database.Database) {
-  const row = db.prepare("select count(*) as count from inventory_items").get() as { count: number }
-  if (Number(row.count ?? 0) > 0) return
-
+function syncSqliteInventoryDataset(db: Database.Database) {
   const insert = db.prepare(
     `insert into inventory_items (id, nama, kategori, stok, satuan, kapasitas, harga_satuan, terakhir_restock, keterangan)
      values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
   const transaction = db.transaction((items: InventoryItem[]) => {
+    db.prepare("delete from inventory_items").run()
     for (const item of items) {
       insert.run(item.id, item.nama, item.kategori, item.stok, item.satuan, item.kapasitas, item.hargaSatuan, item.terakhirRestok, item.keterangan ?? "")
     }
@@ -86,7 +112,7 @@ function prepareSqliteInventoryDatabase() {
   initSqliteDatabase()
   const db = getSqliteDb()
   ensureSqliteInventoryTable(db)
-  seedSqliteInventoryIfEmpty(db)
+  syncSqliteInventoryDataset(db)
   return db
 }
 
@@ -117,7 +143,7 @@ function mapRow(row: {
 async function prepareInventoryDatabase() {
   const pool = getDbPool()
   await ensureInventoryTable(pool)
-  await seedInventoryIfEmpty(pool)
+  await syncInventoryDataset(pool)
   return pool
 }
 

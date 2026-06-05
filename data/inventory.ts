@@ -1,6 +1,6 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type KategoriItem = "Feed" | "Medical" | "Parts" | "Cleaning" | "Utility"
+export type KategoriItem = "Konstruksi" | "Utilitas" | "SDM"
 
 export interface InventoryItem {
   id: string
@@ -15,21 +15,16 @@ export interface InventoryItem {
 }
 
 export const inventoryItems: InventoryItem[] = [
-  { id:"F-001", nama:"Pakan Ayam Layer B11S",         kategori:"Feed",     stok:21, satuan:"karung", kapasitas:40, hargaSatuan:365_000, terakhirRestok:"2025-09-15", keterangan:"1 karung = 50 kg · stok ±3 minggu" },
-  { id:"F-002", nama:"Pakan Ayam 524A",               kategori:"Feed",     stok:30, satuan:"karung", kapasitas:40, hargaSatuan:365_000, terakhirRestok:"2025-10-02", keterangan:"1 karung = 50 kg · digunakan setelah layer penuh" },
-  { id:"F-003", nama:"Dedak / Campuran Pakan",        kategori:"Feed",     stok:5,  satuan:"karung", kapasitas:20, hargaSatuan:120_000, terakhirRestok:"2025-10-10", keterangan:"Suplemen campuran pakan utama" },
-  { id:"M-001", nama:"Vaksin ND Lasota",              kategori:"Medical",  stok:6,  satuan:"botol",  kapasitas:20, hargaSatuan:14_500,  terakhirRestok:"2025-09-18", keterangan:"Vaksinasi rutin · simpan di lemari es" },
-  { id:"M-002", nama:"Vaksin MLS 1000 DS",            kategori:"Medical",  stok:1,  satuan:"vial",   kapasitas:5,  hargaSatuan:95_000,  terakhirRestok:"2025-08-22", keterangan:"Newcastle + IB · stok kritis" },
-  { id:"M-003", nama:"Vitachick Vitamin 5gr",         kategori:"Medical",  stok:80, satuan:"bungkus",kapasitas:160,hargaSatuan:1_250,   terakhirRestok:"2025-10-01", keterangan:"Vitamin harian air minum" },
-  { id:"M-004", nama:"Egg Stimulant (Obat+Vit)",     kategori:"Medical",  stok:4,  satuan:"bungkus",kapasitas:10, hargaSatuan:21_000,  terakhirRestok:"2025-09-20", keterangan:"100gr · stimulasi produksi telur" },
-  { id:"M-005", nama:"Neobro & Mineral",              kategori:"Medical",  stok:6,  satuan:"bungkus",kapasitas:12, hargaSatuan:37_000,  terakhirRestok:"2025-10-05", keterangan:"250gr · vitamin penggemuk & mineral" },
-  { id:"M-006", nama:"Vetagumbosept",                 kategori:"Medical",  stok:3,  satuan:"bungkus",kapasitas:10, hargaSatuan:21_000,  terakhirRestok:"2025-09-10", keterangan:"100gr · obat gumboro + vitamin" },
-  { id:"C-001", nama:"Peralatan Kebersihan",          kategori:"Cleaning", stok:2,  satuan:"set",    kapasitas:4,  hargaSatuan:250_000, terakhirRestok:"2025-10-28", keterangan:"Wipol, Rinso, cairan pengusir lalat" },
-  { id:"C-002", nama:"Kapur Sirih Kandang",           kategori:"Cleaning", stok:8,  satuan:"kg",     kapasitas:20, hargaSatuan:5_000,   terakhirRestok:"2025-10-15", keterangan:"Disinfeksi lantai kandang rutin" },
-  { id:"U-001", nama:"Token Listrik PLN",             kategori:"Utility",  stok:1,  satuan:"token",  kapasitas:3,  hargaSatuan:203_000, terakhirRestok:"2025-11-01", keterangan:"Top-up rata-rata Rp200rb–600rb/bln" },
-  { id:"P-001", nama:"Lampu Kandang / Penghangat",    kategori:"Parts",    stok:3,  satuan:"pcs",    kapasitas:10, hargaSatuan:25_000,  terakhirRestok:"2025-10-20", keterangan:"Lampu penghangat DOC & lampu putus" },
-  { id:"P-002", nama:"Timbangan Digital",             kategori:"Parts",    stok:1,  satuan:"unit",   kapasitas:2,  hargaSatuan:150_000, terakhirRestok:"2025-08-13", keterangan:"Timbangan telur & pakan harian" },
-  { id:"P-003", nama:"Kipas Angin Kandang",           kategori:"Parts",    stok:2,  satuan:"unit",   kapasitas:4,  hargaSatuan:180_000, terakhirRestok:"2025-08-13", keterangan:"Sirkulasi udara kandang layer" },
+  { id:"I-001", nama:"BIAYA PEMBUATAN TEMBOK KANDANG", kategori:"Konstruksi", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:24_827_000, terakhirRestok:"2024-11-23", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-002", nama:"BIAYA PEMBUATAN ATAP BAJA RINGAN", kategori:"Konstruksi", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:31_450_000, terakhirRestok:"2024-12-02", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-003", nama:"BIAYA PEMBUATAN TANGGA DAN LAINNYA", kategori:"Konstruksi", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:11_281_000, terakhirRestok:"2024-12-12", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-004", nama:"BIAYA PEMBUATAN AIR BERSIH (SUMUR)", kategori:"Utilitas", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:17_588_000, terakhirRestok:"2024-12-28", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-005", nama:"BIAYA INSTALASI KELISTRIKAN", kategori:"Utilitas", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:8_011_500, terakhirRestok:"2025-01-06", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-006", nama:"BIAYA PEMBELIAN KANDANG DAN NIPPLE", kategori:"Konstruksi", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:44_736_800, terakhirRestok:"2025-01-19", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-007", nama:"PEMBUATAN BANGUNAN TEMPAT PAKAN", kategori:"Konstruksi", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:18_503_000, terakhirRestok:"2025-02-02", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-008", nama:"PEMBUATAN KAMAR MANDI DAN TERAS, KOLAM", kategori:"Konstruksi", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:6_903_000, terakhirRestok:"2025-02-05", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-009", nama:"PEMASANGAN CCTV", kategori:"Utilitas", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:5_700_000, terakhirRestok:"2025-02-08", keterangan:"Sheet REKAP TOTAL" },
+  { id:"I-010", nama:"GAJIAN", kategori:"SDM", stok:1, satuan:"unit", kapasitas:1, hargaSatuan:36_000_000, terakhirRestok:"2025-02-16", keterangan:"Sheet REKAP TOTAL" },
 ]
 
 export function getInventoryStats() {
@@ -37,7 +32,7 @@ export function getInventoryStats() {
   const lowStock       = inventoryItems.filter(i => i.stok / i.kapasitas < 0.30).length
   const criticalStock  = inventoryItems.filter(i => i.stok / i.kapasitas < 0.15).length
   const totalNilai     = inventoryItems.reduce((a, b) => a + b.stok * b.hargaSatuan, 0)
-  const feedKg         = inventoryItems.filter(i => i.kategori === "Feed").reduce((a, b) => a + b.stok * 50, 0)
+  const feedKg         = 0
   return { totalItems, lowStock, criticalStock, totalNilai, feedKg }
 }
 
@@ -71,5 +66,5 @@ export function rupiahInv(n: number, short = false): string {
   return `Rp ${_fmt(n)}`
 }
 
-export const KATEGORI_LIST = ["All", "Feed", "Medical", "Cleaning", "Parts", "Utility"] as const
+export const KATEGORI_LIST = ["All", "Konstruksi", "Utilitas", "SDM"] as const
 export type KategoriFilter = typeof KATEGORI_LIST[number]

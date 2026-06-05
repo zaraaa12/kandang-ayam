@@ -8,6 +8,11 @@ import {
   type FinanceTransactionInput,
   type FinanceTxType,
 } from "@/lib/finance-db"
+import {
+  createInvestmentTransaction,
+  deleteInvestmentTransaction,
+  updateInvestmentTransaction,
+} from "@/lib/investment-db"
 
 function toFinanceInput(form: {
   type: FinanceTxType
@@ -18,7 +23,8 @@ function toFinanceInput(form: {
   jumlah: number
   notes: string
 }): FinanceTransactionInput {
-  if (form.type !== "sale" && form.type !== "expense") {
+  const validTypes: FinanceTxType[] = ["income", "expense", "investor_income", "warist"]
+  if (!validTypes.includes(form.type)) {
     throw new Error("Tipe transaksi tidak valid.")
   }
 
@@ -63,8 +69,12 @@ export async function saveFinanceTransactionAction(
 ) {
   const input = toFinanceInput(form)
   const transaction = id
-    ? await updateFinanceTransaction(id, input)
-    : await createFinanceTransaction(input)
+    ? form.type === "investor_income"
+      ? await updateInvestmentTransaction(id, input)
+      : await updateFinanceTransaction(id, input)
+    : form.type === "investor_income"
+      ? await createInvestmentTransaction(input)
+      : await createFinanceTransaction(input)
 
   revalidatePath("/finance")
   revalidatePath("/dashboard")
@@ -77,7 +87,16 @@ export async function deleteFinanceTransactionAction(id: string) {
     throw new Error("ID transaksi tidak valid.")
   }
 
-  await deleteFinanceTransaction(id)
+  try {
+    await deleteFinanceTransaction(id)
+  } catch (error) {
+    if (error instanceof Error && error.message === "Transaksi finance tidak ditemukan.") {
+      await deleteInvestmentTransaction(id)
+    } else {
+      throw error
+    }
+  }
+
   revalidatePath("/finance")
   revalidatePath("/dashboard")
 }

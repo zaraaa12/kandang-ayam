@@ -13,7 +13,9 @@ SELECT
     WHEN table_name = 'livestock_batches' THEN 'Livestock Batches'
     WHEN table_name = 'livestock_vaccinations' THEN 'Livestock Vaccinations'
     WHEN table_name = 'produksi_records' THEN 'Produksi Records'
-    WHEN table_name = 'finance_transactions' THEN 'Finance Transactions'
+    WHEN table_name = 'finance_income' THEN 'Finance Income'
+    WHEN table_name = 'finance_expense' THEN 'Finance Expense'
+    WHEN table_name = 'finance_warist' THEN 'Finance Warist'
     ELSE 'Other'
   END as description,
   'EXISTS' as status
@@ -25,12 +27,14 @@ WHERE table_schema = 'public'
     'livestock_batches',
     'livestock_vaccinations',
     'produksi_records',
-    'finance_transactions'
+    'finance_income',
+    'finance_expense',
+    'finance_warist'
   )
 ORDER BY table_name;
 
 -- ============================================================================
--- Expected output: 6 rows (semua tabel harus ada)
+-- Expected output: 8 rows (semua tabel harus ada)
 -- Jika ada yang hilang, jalankan schema.sql terlebih dahulu untuk membuat tabel
 -- ============================================================================
 
@@ -49,7 +53,9 @@ WHERE schemaname = 'public'
     'livestock_batches',
     'livestock_vaccinations',
     'produksi_records',
-    'finance_transactions'
+    'finance_income',
+    'finance_expense',
+    'finance_warist'
   )
 ORDER BY tablename;
 
@@ -78,11 +84,13 @@ WHERE schemaname = 'public'
     'livestock_batches',
     'livestock_vaccinations',
     'produksi_records',
-    'finance_transactions'
+    'finance_income',
+    'finance_expense',
+    'finance_warist'
   )
 ORDER BY tablename, policyname;
 
 -- ============================================================================
 -- Expected output (sebelum setup): 0 rows
--- Expected output (sesudah setup): 6 rows (satu policy per tabel)
+-- Expected output (sesudah setup): 8 rows (satu policy per tabel)
 -- ============================================================================

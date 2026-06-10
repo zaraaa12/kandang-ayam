@@ -6,7 +6,10 @@ import { getFinanceTransactions } from "../lib/finance-db"
 async function main() {
   try {
     const rows = await getFinanceTransactions()
-    console.log('finance_transactions count:', rows.length)
+    console.log('finance records count:', rows.length)
+    console.log('income count:', rows.filter(row => row.type === 'income').length)
+    console.log('expense count:', rows.filter(row => row.type === 'expense').length)
+    console.log('warist count:', rows.filter(row => row.type === 'warist').length)
     console.log('first 10 rows:')
     console.log(rows.slice(0, 10))
   } catch (err) {

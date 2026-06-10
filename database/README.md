@@ -11,7 +11,9 @@ DATABASE_SSL="false"
 The production and finance pages create and seed these tables automatically on first database access:
 
 - `produksi_records`
-- `finance_transactions`
+- `finance_income`
+- `finance_expense`
+- `finance_warist`
 - `livestock_batches`
 - `livestock_vaccinations`
 - `inventory_items`

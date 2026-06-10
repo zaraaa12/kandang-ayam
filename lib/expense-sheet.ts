@@ -1,58 +1,64 @@
-import * as fs from "fs"
-import * as path from "path"
-import * as xlsx from "xlsx"
+import fs from "fs"
+import path from "path"
+import { read, utils } from "xlsx"
+import type { FinanceTransaction } from "./finance-db"
 
-export type SheetFinanceTx = {
-  id: string
-  no: string
-  type: "income"
-  date: string
-  category: string
-  buyer: string
-  stock: number
-  vol: number
-  sisa: number
-  harga: number
-  jumlah: number
-  notes: string
-}
+const INCOME_XLSX_PATH = path.join(process.cwd(), "income.xlsx")
 
 const parseNumber = (value: unknown): number => {
   if (value == null) return 0
   if (typeof value === "number") return value
-  const s = String(value).replace(/[^0-9,.-]/g, "").replace(/,/g, "")
-  const n = Number(s)
-  return Number.isFinite(n) ? n : 0
+  if (typeof value === "string") {
+    // Indonesian format: dot = thousands sep, comma = decimal sep
+    // e.g. "Rp25.000" = 25000, "Rp1.500.000" = 1500000
+    let s = value.replace(/Rp/i, "").trim()
+    // Remove dots (thousands separators) then replace comma with dot (decimal)
+    s = s.replace(/\./g, "").replace(/,/g, ".")
+    // Remove any remaining non-numeric chars except dot and minus
+    s = s.replace(/[^0-9.\-]/g, "")
+    const n = Number(s)
+    return Number.isFinite(n) ? n : 0
+  }
+  return 0
 }
 
 const parseDate = (value: unknown): string | null => {
-  if (!value) return null
-  if (value instanceof Date && !isNaN(value.getTime())) {
-    const y = value.getFullYear()
-    const m = String(value.getMonth() + 1).padStart(2, "0")
-    const d = String(value.getDate()).padStart(2, "0")
-    return `${y}-${m}-${d}`
+  if (value == null) return null
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : formatDate(value)
   }
   const s = String(value).trim()
-  // expect format dd/mm/yyyy or yyyy-mm-dd
-  const parts = s.split(/[-\/]/)
-  if (parts.length === 3) {
-    if (parts[0].length === 4) {
-      // yyyy-mm-dd
-      return `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`
+  if (!s) return null
+
+  // dd/mm/yyyy or dd/mm/yy
+  const slashMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+  if (slashMatch) {
+    let [, day, month, year] = slashMatch
+    if (year.length === 2) {
+      year = Number(year) < 50 ? `20${year}` : `19${year}`
     }
-    // assume dd/mm/yyyy
-    const dd = parts[0].padStart(2, "0")
-    const mm = parts[1].padStart(2, "0")
-    const yyyy = parts[2].length === 2
-      ? `${Number(parts[2]) < 50 ? "20" : "19"}${parts[2]}`
-      : parts[2]
-    return `${yyyy}-${mm}-${dd}`
+    const dateObj = new Date(Number(year), Number(month) - 1, Number(day))
+    if (!Number.isNaN(dateObj.getTime()) && dateObj.getFullYear() === Number(year) && dateObj.getMonth() === Number(month) - 1 && dateObj.getDate() === Number(day)) {
+      return formatDate(dateObj)
+    }
   }
-  // fallback: try Date parse
-  const d = new Date(s)
-  if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
-  return null
+
+  // yyyy-mm-dd
+  const dashMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (dashMatch) {
+    const [, y, m, d] = dashMatch
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`
+  }
+
+  const dateObj = new Date(s)
+  return !Number.isNaN(dateObj.getTime()) ? formatDate(dateObj) : null
+}
+
+function formatDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
 }
 
 const getCellValue = (row: Record<string, unknown>, keys: string[]) => {
@@ -62,19 +68,28 @@ const getCellValue = (row: Record<string, unknown>, keys: string[]) => {
   return null
 }
 
-export function getExpenseSheetTransactions(): SheetFinanceTx[] {
+export async function getIncomeSheetTransactions(): Promise<FinanceTransaction[]> {
   try {
-    const file = path.join(process.cwd(), "expense.xlsx")
-    if (!fs.existsSync(file)) return []
-    const buf = fs.readFileSync(file)
-    const wb = xlsx.read(buf, { type: "buffer", cellDates: true })
-    const sheet = wb.Sheets[wb.SheetNames[0]]
-    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null, raw: false, blankrows: false })
+    if (!fs.existsSync(INCOME_XLSX_PATH)) {
+      return []
+    }
 
-    const result: SheetFinanceTx[] = []
+    const fileBuffer = fs.readFileSync(INCOME_XLSX_PATH)
+    const workbook = read(fileBuffer, { type: "buffer", cellDates: true })
+    const sheetName = workbook.SheetNames[0]
+    if (!sheetName) return []
+
+    const sheet = workbook.Sheets[sheetName]
+    const rows = utils.sheet_to_json<Record<string, unknown>>(sheet, {
+      defval: null,
+      raw: false,
+      blankrows: false,
+    })
+
+    const result: FinanceTransaction[] = []
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
-      const no = String(getCellValue(row, ["NO", "No", "No.", "NO.", "No"] ) || "").trim()
+      const no = String(getCellValue(row, ["NO", "No", "No.", "NO."]) || "").trim()
       const tanggal = getCellValue(row, ["TANGGAL", "Tanggal", "tanggal"]) || null
       const stockTelur = getCellValue(row, ["STOCK TELUR(KG)", "STOCK TELUR", "Stock Telur", "STOK TELUR"]) || null
       const terjual = getCellValue(row, ["TERJUAL(KG)", "TERJUAL", "Terjual"]) || null
@@ -92,20 +107,22 @@ export function getExpenseSheetTransactions(): SheetFinanceTx[] {
       const jumlah = parseNumber(total)
 
       if (vol <= 0 && jumlah <= 0) continue
+      // Skip summary/total rows
+      if (String(getCellValue(row, ["HARGA", "Harga"]) || "").toUpperCase() === "TOTAL") continue
 
-      const tx: SheetFinanceTx = {
-        id: `sheet-egg-sale-${String(i + 1).padStart(3, "0")}`,
+      const tx: FinanceTransaction = {
+        id: `sheet-income-${String(i + 1).padStart(3, "0")}`,
         no: `TX-SHEET-${String(i + 1).padStart(3, "0")}`,
-        type: "income",
-        date: date,
+        type: "income" as const,
+        date,
         category: "Penjualan Telur",
-        buyer: String(getCellValue(row, ["BUYER", "Pembeli"]) || ""),
+        buyer: String(getCellValue(row, ["BUYER", "Pembeli", "buyer"]) || ""),
         stock,
         vol,
         sisa,
         harga: hargaSatuan || (vol > 0 ? Math.round(jumlah / vol) : 0),
         jumlah,
-        notes: String(getCellValue(row, ["NOTES", "KETERANGAN", "Notes"]) || "expense.xlsx"),
+        notes: "income.xlsx",
       }
 
       result.push(tx)
@@ -113,8 +130,8 @@ export function getExpenseSheetTransactions(): SheetFinanceTx[] {
 
     return result
   } catch (error) {
-    // on error, return empty array so seed won't fail
-    console.warn("expense-sheet parse error:", error)
+    console.warn("Unable to load income.xlsx for finance income table:", error)
     return []
   }
 }
+

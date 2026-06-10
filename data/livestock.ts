@@ -28,30 +28,43 @@ export const flockSummary = {
 }
 
 // Calculate flock summary from actual batch data
-export function calculateFlockSummary(batchList: Batch[]): typeof flockSummary {
+// When totalDijual is provided (from finance warist transactions), uses real sold data instead of estimates
+export function calculateFlockSummary(batchList: Batch[], totalDijual?: number): typeof flockSummary {
   const totalDibeli = batchList.reduce((sum, b) => sum + b.jumlah, 0)
   
-  // Estimate mortality based on status
-  // active batches: assume ~5% mortality (healthy)
-  // partial batches: assume ~15% mortality
-  // closed batches: assume ~25% mortality (completed cycle)
+  if (totalDibeli === 0) {
+    return { totalDibeli: 0, mati: 0, dijual: 0, aktif: 0, persentaseMati: 0, persentaseAktif: 0 }
+  }
+
+  // Estimate mortality based on batch status (deaths are not tracked as finance transactions)
   let mati = 0
-  let dijual = 0
-  
   for (const batch of batchList) {
     if (batch.status === "active") {
       mati += Math.round(batch.jumlah * 0.05)
     } else if (batch.status === "partial") {
       mati += Math.round(batch.jumlah * 0.12)
-      dijual += Math.round(batch.jumlah * 0.03)
     } else {
-      // closed - assume sold/afkir
       mati += Math.round(batch.jumlah * 0.15)
-      dijual += Math.round(batch.jumlah * 0.70)
     }
   }
-  
-  const aktif = totalDibeli - mati - dijual
+
+  let dijual: number
+  if (totalDijual !== undefined) {
+    // Use real finance data: warist transactions = actual ayam afkir/cull sales
+    dijual = totalDijual
+  } else {
+    // Fallback: estimate sold based on batch status
+    dijual = 0
+    for (const batch of batchList) {
+      if (batch.status === "partial") {
+        dijual += Math.round(batch.jumlah * 0.03)
+      } else if (batch.status === "closed") {
+        dijual += Math.round(batch.jumlah * 0.70)
+      }
+    }
+  }
+
+  const aktif = Math.max(0, totalDibeli - mati - dijual)
   const persentaseMati = totalDibeli > 0 ? Math.round((mati / totalDibeli) * 1000) / 10 : 0
   const persentaseAktif = totalDibeli > 0 ? Math.round((aktif / totalDibeli) * 1000) / 10 : 0
   

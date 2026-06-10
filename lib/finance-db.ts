@@ -1,8 +1,10 @@
 import { Pool } from "pg"
 import Database from "better-sqlite3"
+import fs from "fs"
+import path from "path"
 import { forceSqliteMode, getDbMode, getDbPool, getSqliteDb, initSqliteDatabase } from "./db"
-import { getExpenseSheetTransactions } from "./expense-sheet"
-import { getIncomeSheetTransactions } from "./income-sheet"
+import { getExpenseSheetTransactions } from "./income-sheet"
+import { getIncomeSheetTransactions } from "./expense-sheet"
 
 export type FinanceTxType = "income" | "expense" | "investor_income" | "warist"
 
@@ -25,15 +27,16 @@ export type FinanceTransactionInput = Omit<FinanceTransaction, "id" | "no">
 
 const SEED_TRANSACTIONS: FinanceTransaction[] = [
   { id:"w1", no:"TX-WARIST", type:"warist", date:"2025-12-01", category:"Penjualan Warist", buyer:"Warist", vol:42, jumlah:1_600_000, notes:"Penjualan 42 ekor ayam afkir. Dana terpisah - tidak masuk kas utama." },
-  { id:"a1", no:"TX-210", type:"income", date:"2026-01-16", category:"Penjualan Telur", buyer:"Pembeli Lokal",  vol:11,  jumlah:286_000,   notes:"" },
-  { id:"a2", no:"TX-209", type:"income", date:"2026-01-15", category:"Penjualan Telur", buyer:"Pasar Mandiri", vol:35,  jumlah:910_000,   notes:"" },
-  { id:"a3", no:"TX-208", type:"income", date:"2026-01-14", category:"Penjualan Telur", buyer:"AgroMart",      vol:38,  jumlah:988_000,   notes:"" },
-  { id:"a4", no:"TX-207", type:"income", date:"2026-01-13", category:"Penjualan Telur", buyer:"Pembeli Lokal", vol:3,   jumlah:78_000,    notes:"" },
-  { id:"a5", no:"TX-206", type:"income", date:"2026-01-12", category:"Penjualan Telur", buyer:"Distributor A", vol:29,  jumlah:754_000,   notes:"" },
-  { id:"a6", no:"TX-205", type:"income", date:"2026-01-11", category:"Penjualan Telur", buyer:"FreshEgg Co.",  vol:43,  jumlah:1_118_000, notes:"" },
-  { id:"b1", no:"EX-001", type:"expense", date:"2026-01-10", category:"Pakan Ayam",    buyer:"Supplier Pakan", vol:0, jumlah:3_650_000, notes:"21 karung @50kg" },
-  { id:"b2", no:"EX-002", type:"expense", date:"2026-01-05", category:"Gaji Karyawan", buyer:"Warist",        vol:0, jumlah:3_000_000, notes:"Gaji Jan 2026" },
 ]
+
+type StoredFinanceTxType = Exclude<FinanceTxType, "investor_income">
+type FinanceTable = "finance_income" | "finance_expense" | "finance_warist"
+
+const TABLE_BY_TYPE: Record<StoredFinanceTxType, FinanceTable> = {
+  income: "finance_income",
+  expense: "finance_expense",
+  warist: "finance_warist",
+}
 
 function txNo(type: FinanceTxType, id: string) {
   const prefix = type === "income" ? "TX" : type === "expense" ? "EX" : type === "investor_income" ? "INV" : "WAR"
@@ -45,9 +48,7 @@ function normalizeFinanceTxType(type: string, category: string): FinanceTxType {
   if (type === "investor_income") return "investor_income"
   if (type === "warist") return "warist"
   if (type === "income") return "income"
-  if (type === "sale") {
-    return category === "Penjualan Warist" ? "warist" : "income"
-  }
+  if (type === "sale") return category === "Penjualan Warist" ? "warist" : "income"
   return category === "Penjualan Warist" ? "warist" : "expense"
 }
 
@@ -58,10 +59,10 @@ function mapRow(row: {
   date: string
   category: string
   buyer: string
-  stock?: string | number
+  stock?: string | number | null
   vol: string | number
-  sisa?: string | number
-  harga?: string | number
+  sisa?: string | number | null
+  harga?: string | number | null
   jumlah: number
   notes: string
 }): FinanceTransaction {
@@ -81,16 +82,26 @@ function mapRow(row: {
   }
 }
 
-function eggSaleKey(tx: FinanceTransaction) {
-  return [
-    tx.date,
-    tx.category.toLowerCase(),
-    Number(tx.vol).toFixed(2),
-    Math.round(Number(tx.jumlah) || 0),
-  ].join("|")
+function storedType(type: FinanceTxType): StoredFinanceTxType {
+  if (type === "investor_income") {
+    throw new Error("Transaksi investasi disimpan di tabel investment_transactions.")
+  }
+  return type
 }
 
-function sheetTxKey(tx: FinanceTransaction) {
+function tableForType(type: FinanceTxType): FinanceTable {
+  return TABLE_BY_TYPE[storedType(type)]
+}
+
+function sortTransactions(records: FinanceTransaction[]) {
+  return [...records].sort((a, b) => {
+    const byDate = b.date.localeCompare(a.date)
+    if (byDate !== 0) return byDate
+    return b.no.localeCompare(a.no)
+  })
+}
+
+function txKey(tx: FinanceTransaction) {
   return [
     tx.type,
     tx.date,
@@ -101,50 +112,104 @@ function sheetTxKey(tx: FinanceTransaction) {
   ].join("|")
 }
 
-async function mergeSheetTransactions(records: FinanceTransaction[]) {
-  const sheetTransactions = getExpenseSheetTransactions()
-    .filter(tx => tx.jumlah > 0)
-    .map(tx => mapRow(tx))
-  const sheetExpenses = (await getIncomeSheetTransactions())
-    .filter(tx => tx.jumlah > 0)
-    .map(tx => mapRow(tx))
+async function getSheetTransactions() {
+  const sheetIncome = (await getIncomeSheetTransactions())
+    .filter((tx: any) => tx.jumlah > 0)
+    .map((tx: any) => mapRow(tx))
 
-  if (sheetTransactions.length === 0 && sheetExpenses.length === 0) {
-    return records
+  const sheetExpenses = getExpenseSheetTransactions()
+    .filter((tx: any) => tx.jumlah > 0)
+    .map((tx: any) => mapRow(tx))
+
+  return [...sheetIncome, ...sheetExpenses]
+}
+
+async function seedSupabaseFromSheetsIfEmpty(pool: Pool) {
+  await ensureTypedFinanceTables(pool)
+
+  const { rows } = await pool.query(`
+    select
+      (select count(*) from finance_income) +
+      (select count(*) from finance_expense) +
+      (select count(*) from finance_warist) as total
+  `)
+  const total = Number(rows[0]?.total ?? 0)
+  if (total > 0) return // already has data, don't overwrite
+
+  console.log("[finance-db] Supabase tables empty, seeding from xlsx files...")
+  const sheetRecords = await getSheetTransactions()
+  const allRecords = [...SEED_TRANSACTIONS, ...sheetRecords]
+
+  if (allRecords.length === 0) return
+
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+
+    const byTable: Record<FinanceTable, FinanceTransaction[]> = {
+      finance_income: [],
+      finance_expense: [],
+      finance_warist: [],
+    }
+
+    for (const tx of allRecords) {
+      byTable[tableForType(tx.type)].push(tx)
+    }
+
+    for (const [table, txs] of Object.entries(byTable) as Array<[FinanceTable, FinanceTransaction[]]>) {
+      if (txs.length === 0) continue
+
+      const values: string[] = []
+      const params: any[] = []
+
+      for (const tx of txs) {
+        params.push(
+          tx.id, tx.no, tx.type, tx.date, tx.category, tx.buyer,
+          tx.stock ?? null, tx.vol, tx.sisa ?? null, tx.harga ?? null, tx.jumlah, tx.notes,
+        )
+        const baseIndex = params.length - 12
+        values.push(
+          `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6}, $${baseIndex + 7}, $${baseIndex + 8}, $${baseIndex + 9}, $${baseIndex + 10}, $${baseIndex + 11}, $${baseIndex + 12})`
+        )
+      }
+
+      await client.query(
+        `insert into ${table} (id, no, type, tx_date, category, buyer, stock, vol, sisa, harga, jumlah, notes)
+         values ${values.join(',')} on conflict (id) do nothing`,
+        params,
+      )
+    }
+
+    await client.query('commit')
+    console.log(`[finance-db] Seeded ${allRecords.length} records to Supabase`)
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
   }
+}
 
-  const sheetKeys = new Set(sheetTransactions.map(eggSaleKey))
-  const expenseKeys = new Set(sheetExpenses.map(sheetTxKey))
+
+function mergeDisplayedTransactions(records: FinanceTransaction[], sheetRecords: FinanceTransaction[]) {
+  const sheetIds = new Set(sheetRecords.map(tx => tx.id))
+  const sheetKeys = new Set(sheetRecords.map(txKey))
   const merged = records.filter(tx => {
-    if (tx.id.startsWith("sheet-egg-sale-")) return false
-    if (tx.id.startsWith("sheet-income-")) return false
-    if (tx.type === "income" && tx.no.startsWith("EX-SHEET-")) return false
-    if (tx.type === "expense" && tx.no.startsWith("EX-SHEET-")) return false
-    if (tx.type === "expense") return !expenseKeys.has(sheetTxKey(tx))
-    if (tx.type !== "income" || tx.category !== "Penjualan Telur") return true
-    return !sheetKeys.has(eggSaleKey(tx))
+    if (sheetIds.has(tx.id)) return false
+    if (tx.no.startsWith("TX-SHEET-") || tx.no.startsWith("EX-SHEET-")) return false
+    return !sheetKeys.has(txKey(tx))
   })
 
-  return [...merged, ...sheetTransactions, ...sheetExpenses].sort((a, b) => {
-    const byDate = b.date.localeCompare(a.date)
-    if (byDate !== 0) return byDate
-    return b.no.localeCompare(a.no)
-  })
+  return sortTransactions([...merged, ...sheetRecords])
 }
 
 function shouldFallbackToSqlite(error: unknown) {
-  if (!process.env.DATABASE_URL) {
-    return true
-  }
-
-  if (!error || typeof error !== "object") {
-    return false
-  }
+  if (!process.env.DATABASE_URL) return true
+  if (!error || typeof error !== "object") return false
 
   const err = error as { code?: string; message?: string }
-  const code = String(err.code ?? "")
+  const code = String(err.code ?? "").toLowerCase()
   const message = String(err.message ?? "").toLowerCase()
-
   const networkErrors = [
     "enotfound",
     "econrefused",
@@ -160,116 +225,338 @@ function shouldFallbackToSqlite(error: unknown) {
     "58030",
   ]
 
-  if (networkErrors.some(token => code.toLowerCase().includes(token) || message.includes(token))) {
-    return true
-  }
-
-  return message.includes("timeout") || message.includes("connection refused") || message.includes("could not connect")
+  return networkErrors.some(token => code.includes(token) || message.includes(token)) || message.includes("timeout") || message.includes("connection refused") || message.includes("could not connect")
 }
 
-async function ensureFinanceTable(pool: Pool) {
-  await pool.query(`
-    create table if not exists finance_transactions (
-      id text primary key,
-      no text not null unique,
-      type text not null check (type in ('income', 'expense', 'investor_income', 'warist')),
-      tx_date date not null,
-      category text not null,
-      buyer text not null default '',
-      vol numeric(10, 2) not null default 0 check (vol >= 0),
-      jumlah integer not null check (jumlah >= 0),
-      notes text not null default '',
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now()
-    )
-  `)
-
-  await pool.query(`
-    alter table finance_transactions
-    drop constraint if exists finance_transactions_type_check
-  `)
-
-  await pool.query(`
-    alter table finance_transactions
-    add constraint finance_transactions_type_check check (type in ('income', 'expense', 'investor_income', 'warist'))
-  `)
-}
-
-async function seedFinanceIfEmpty(pool: Pool) {
-  const { rows } = await pool.query<{ count: string }>("select count(*) from finance_transactions")
-  if (Number(rows[0]?.count ?? 0) > 0) return
-
-  const client = await pool.connect()
-  try {
-    await client.query("begin")
-    for (const tx of SEED_TRANSACTIONS) {
-      await client.query(
-        `insert into finance_transactions (id, no, type, tx_date, category, buyer, vol, jumlah, notes)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [tx.id, tx.no, tx.type, tx.date, tx.category, tx.buyer, tx.vol, tx.jumlah, tx.notes],
+async function ensureTypedFinanceTables(pool: Pool) {
+  for (const [type, table] of Object.entries(TABLE_BY_TYPE) as Array<[StoredFinanceTxType, FinanceTable]>) {
+    await pool.query(`
+      create table if not exists ${table} (
+        id text primary key,
+        no text not null unique,
+        type text not null check (type = '${type}'),
+        tx_date date not null,
+        category text not null,
+        buyer text not null default '',
+        stock numeric(10, 2),
+        vol numeric(10, 2) not null default 0 check (vol >= 0),
+        sisa numeric(10, 2),
+        harga numeric(10, 2),
+        jumlah integer not null check (jumlah >= 0),
+        notes text not null default '',
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
       )
-    }
-    await client.query("commit")
-  } catch (error) {
-    await client.query("rollback")
-    throw error
-  } finally {
-    client.release()
+    `)
+
+    await pool.query(`alter table ${table} add column if not exists stock numeric(10, 2)`)
+    await pool.query(`alter table ${table} add column if not exists sisa numeric(10, 2)`)
+    await pool.query(`alter table ${table} add column if not exists harga numeric(10, 2)`)
+    await pool.query(`alter table ${table} alter column harga type numeric(10, 2)`)
   }
 }
 
-function ensureSqliteFinanceTable(db: Database.Database) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS finance_transactions (
-      id TEXT PRIMARY KEY,
-      no TEXT NOT NULL UNIQUE,
-      type TEXT NOT NULL CHECK (type IN ('income', 'expense', 'investor_income', 'warist')),
-      tx_date TEXT NOT NULL,
-      category TEXT NOT NULL,
-      buyer TEXT NOT NULL DEFAULT '',
-      vol REAL NOT NULL DEFAULT 0 CHECK (vol >= 0),
-      jumlah INTEGER NOT NULL CHECK (jumlah >= 0),
-      notes TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `)
-}
+async function getLegacyFinanceRecords(pool: Pool) {
+  const exists = await pool.query<{ exists: boolean }>("select to_regclass('public.finance_transactions') is not null as exists")
+  if (!exists.rows[0]?.exists) return []
 
-function seedSqliteFinanceIfEmpty(db: Database.Database) {
-  const countRow = db.prepare("select count(*) as count from finance_transactions").get() as { count: number }
-  if (Number(countRow?.count ?? 0) > 0) return
-
-  const insert = db.prepare(
-    `insert into finance_transactions (id, no, type, tx_date, category, buyer, vol, jumlah, notes)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-
-  const transaction = db.transaction((records: FinanceTransaction[]) => {
-    for (const record of records) {
-      insert.run(record.id, record.no, record.type, record.date, record.category, record.buyer, record.vol, record.jumlah, record.notes)
-    }
-  })
-
-  transaction(SEED_TRANSACTIONS)
-}
-
-function prepareSqliteFinanceDatabase() {
-  initSqliteDatabase()
-  const db = getSqliteDb()
-  ensureSqliteFinanceTable(db)
-  seedSqliteFinanceIfEmpty(db)
-  return db
-}
-
-
-async function getSqliteFinanceRecords() {
-  const db = prepareSqliteFinanceDatabase()
-  const rows = db.prepare(`
-    select id, no, type, tx_date as date, category, buyer, vol, jumlah, notes
+  const { rows } = await pool.query(`
+    select
+      id,
+      no,
+      type,
+      tx_date::text as date,
+      category,
+      buyer,
+      null::text as stock,
+      vol::text as vol,
+      null::text as sisa,
+      null::int as harga,
+      jumlah,
+      notes
     from finance_transactions
     where type != 'investor_income'
-    order by tx_date desc, created_at desc
+  `)
+
+  return rows.map(mapRow)
+}
+
+async function dropLegacyFinanceTable(pool: Pool) {
+  await pool.query("drop table if exists finance_transactions")
+}
+
+async function getStoredFinanceRecords(pool: Pool) {
+  const { rows } = await pool.query(`
+    select id, no, type, tx_date::text as date, category, buyer, stock::text as stock, vol::text as vol, sisa::text as sisa, harga, jumlah, notes, created_at
+    from finance_income
+    union all
+    select id, no, type, tx_date::text as date, category, buyer, stock::text as stock, vol::text as vol, sisa::text as sisa, harga, jumlah, notes, created_at
+    from finance_expense
+    union all
+    select id, no, type, tx_date::text as date, category, buyer, stock::text as stock, vol::text as vol, sisa::text as sisa, harga, jumlah, notes, created_at
+    from finance_warist
+    order by date desc, created_at desc
+  `)
+
+  return rows.map(mapRow)
+}
+
+async function upsertFinanceRecord(pool: Pool, tx: FinanceTransaction) {
+  const table = tableForType(tx.type)
+  await pool.query(
+    `insert into ${table} (id, no, type, tx_date, category, buyer, stock, vol, sisa, harga, jumlah, notes, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+     on conflict (id) do update set
+       no = excluded.no,
+       type = excluded.type,
+       tx_date = excluded.tx_date,
+       category = excluded.category,
+       buyer = excluded.buyer,
+       stock = excluded.stock,
+       vol = excluded.vol,
+       sisa = excluded.sisa,
+       harga = excluded.harga,
+       jumlah = excluded.jumlah,
+       notes = excluded.notes,
+       updated_at = now()`,
+    [tx.id, tx.no, tx.type, tx.date, tx.category, tx.buyer, tx.stock ?? null, tx.vol, tx.sisa ?? null, tx.harga ?? null, tx.jumlah, tx.notes],
+  )
+}
+
+// Track last sync time and file modification times to avoid unnecessary syncs
+let lastSyncTime: number = 0
+let lastExpenseSheetMtime: number = 0
+let lastIncomeSheetMtime: number = 0
+const SYNC_INTERVAL = 300000 // Only sync once per 5 minutes
+
+// Cache for sheet transactions to avoid re-parsing
+let cachedSheetTransactions: FinanceTransaction[] | null = null
+let cachedSheetTime: number = 0
+const SHEET_CACHE_INTERVAL = 60000 // Cache sheets for 1 minute
+
+async function getCachedSheetTransactions() {
+  const now = Date.now()
+  if (cachedSheetTransactions && (now - cachedSheetTime) < SHEET_CACHE_INTERVAL) {
+    return cachedSheetTransactions
+  }
+  
+  const expensePath = path.join(process.cwd(), 'expense.xlsx')
+  const incomePath = path.join(process.cwd(), 'income.xlsx')
+  
+  let expenseMtime = 0
+  let incomeMtime = 0
+  
+  try {
+    if (fs.existsSync(expensePath)) {
+      expenseMtime = fs.statSync(expensePath).mtimeMs
+    }
+  } catch (e) {}
+  
+  try {
+    if (fs.existsSync(incomePath)) {
+      incomeMtime = fs.statSync(incomePath).mtimeMs
+    }
+  } catch (e) {}
+  
+  // If files haven't changed, use cache
+  if (cachedSheetTransactions && expenseMtime === lastExpenseSheetMtime && incomeMtime === lastIncomeSheetMtime) {
+    return cachedSheetTransactions
+  }
+  
+  cachedSheetTransactions = await getSheetTransactions()
+  cachedSheetTime = now
+  lastExpenseSheetMtime = expenseMtime
+  lastIncomeSheetMtime = incomeMtime
+  
+  return cachedSheetTransactions
+}
+
+async function syncDisplayedFinanceRecords(pool: Pool) {
+  const now = Date.now()
+
+  console.log("[finance-db] syncDisplayedFinanceRecords start", {
+    lastSyncTime,
+    now,
+    delta: now - lastSyncTime,
+  })
+  
+  // Skip sync if we synced recently (within SYNC_INTERVAL)
+  if (now - lastSyncTime < SYNC_INTERVAL) {
+    console.log("[finance-db] skip sync (SYNC_INTERVAL) returning stored records")
+    return sortTransactions(await getStoredFinanceRecords(pool))
+  }
+
+  
+  // Check if Excel files have changed using cached mtimes
+  const expensePath = path.join(process.cwd(), 'expense.xlsx')
+  const incomePath = path.join(process.cwd(), 'income.xlsx')
+
+  console.log("[finance-db] excel mtimes", {
+    expensePath,
+    incomePath,
+    lastExpenseSheetMtime,
+    lastIncomeSheetMtime,
+    lastSyncTime,
+  })
+
+  
+  let expenseMtime = 0
+  let incomeMtime = 0
+  
+  try {
+    if (fs.existsSync(expensePath)) {
+      expenseMtime = fs.statSync(expensePath).mtimeMs
+    }
+  } catch (e) {}
+  
+  try {
+    if (fs.existsSync(incomePath)) {
+      incomeMtime = fs.statSync(incomePath).mtimeMs
+    }
+  } catch (e) {}
+  
+  // Skip sync if files haven't changed since last sync
+  if (expenseMtime === lastExpenseSheetMtime && incomeMtime === lastIncomeSheetMtime && lastSyncTime > 0) {
+    return sortTransactions(await getStoredFinanceRecords(pool))
+  }
+  
+  await ensureTypedFinanceTables(pool)
+  const storedRecords = await getStoredFinanceRecords(pool)
+  const legacyRecords = await getLegacyFinanceRecords(pool)
+  const baseRecords = storedRecords.length > 0 || legacyRecords.length > 0 ? [...storedRecords, ...legacyRecords] : SEED_TRANSACTIONS
+  
+  // Use cached sheet transactions
+  const sheetRecords = await getCachedSheetTransactions()
+  const displayedRecords = mergeDisplayedTransactions(baseRecords, sheetRecords)
+
+  // Batch insert for better performance
+  if (displayedRecords.length > 0) {
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+
+      // Clear existing records
+      await client.query('DELETE FROM finance_income')
+      await client.query('DELETE FROM finance_expense')
+      await client.query('DELETE FROM finance_warist')
+
+      // Bulk upsert (much faster than per-row roundtrips)
+      const byTable: Record<FinanceTable, FinanceTransaction[]> = {
+        finance_income: [],
+        finance_expense: [],
+        finance_warist: [],
+      }
+
+      for (const tx of displayedRecords) {
+        byTable[tableForType(tx.type)].push(tx)
+      }
+
+      for (const [table, txs] of Object.entries(byTable) as Array<[FinanceTable, FinanceTransaction[]]>) {
+        if (txs.length === 0) continue
+
+        // Prepare VALUES list with parameterized placeholders
+        // Columns: id, no, type, tx_date, category, buyer, stock, vol, sisa, harga, jumlah, notes, updated_at
+        const values: string[] = []
+        const params: any[] = []
+
+        for (const tx of txs) {
+          params.push(
+            tx.id,
+            tx.no,
+            tx.type,
+            tx.date,
+            tx.category,
+            tx.buyer,
+            tx.stock ?? null,
+            tx.vol,
+            tx.sisa ?? null,
+            tx.harga ?? null,
+            tx.jumlah,
+            tx.notes,
+          )
+
+          const baseIndex = params.length - 12 // last 12 pushed
+          values.push(
+            `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6}, $${baseIndex + 7}, $${baseIndex + 8}, $${baseIndex + 9}, $${baseIndex + 10}, $${baseIndex + 11}, $${baseIndex + 12})`
+          )
+        }
+
+        await client.query(
+          `insert into ${table} (id, no, type, tx_date, category, buyer, stock, vol, sisa, harga, jumlah, notes)
+           values ${values.join(',')}
+           on conflict (id) do update set
+             no = excluded.no,
+             type = excluded.type,
+             tx_date = excluded.tx_date,
+             category = excluded.category,
+             buyer = excluded.buyer,
+             stock = excluded.stock,
+             vol = excluded.vol,
+             sisa = excluded.sisa,
+             harga = excluded.harga,
+             jumlah = excluded.jumlah,
+             notes = excluded.notes,
+             updated_at = now()`,
+          params,
+        )
+      }
+
+      await client.query('commit')
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+
+  await dropLegacyFinanceTable(pool)
+  
+  // Update tracking variables
+  lastSyncTime = now
+  lastExpenseSheetMtime = expenseMtime
+  lastIncomeSheetMtime = incomeMtime
+  
+  return sortTransactions(await getStoredFinanceRecords(pool))
+}
+
+function ensureSqliteTypedFinanceTables(db: Database.Database) {
+  for (const [type, table] of Object.entries(TABLE_BY_TYPE) as Array<[StoredFinanceTxType, FinanceTable]>) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ${table} (
+        id TEXT PRIMARY KEY,
+        no TEXT NOT NULL UNIQUE,
+        type TEXT NOT NULL CHECK (type = '${type}'),
+        tx_date TEXT NOT NULL,
+        category TEXT NOT NULL,
+        buyer TEXT NOT NULL DEFAULT '',
+        stock REAL,
+        vol REAL NOT NULL DEFAULT 0 CHECK (vol >= 0),
+        sisa REAL,
+        harga REAL,
+        jumlah INTEGER NOT NULL CHECK (jumlah >= 0),
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `)
+
+    const columns = new Set((db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>).map(col => col.name))
+    if (!columns.has("stock")) db.exec(`ALTER TABLE ${table} ADD COLUMN stock REAL`)
+    if (!columns.has("sisa")) db.exec(`ALTER TABLE ${table} ADD COLUMN sisa REAL`)
+    if (!columns.has("harga")) db.exec(`ALTER TABLE ${table} ADD COLUMN harga INTEGER`)
+  }
+}
+
+function getSqliteLegacyFinanceRecords(db: Database.Database) {
+  const exists = db.prepare("select name from sqlite_master where type = 'table' and name = 'finance_transactions'").get()
+  if (!exists) return []
+
+  const rows = db.prepare(`
+    select id, no, type, tx_date as date, category, buyer, null as stock, vol, null as sisa, null as harga, jumlah, notes
+    from finance_transactions
+    where type != 'investor_income'
   `).all() as Array<{
     id: string
     no: string
@@ -277,11 +564,131 @@ async function getSqliteFinanceRecords() {
     date: string
     category: string
     buyer: string
+    stock: null
     vol: number
+    sisa: null
+    harga: null
     jumlah: number
     notes: string
   }>
-  return mergeSheetTransactions(rows.map(mapRow))
+
+  return rows.map(mapRow)
+}
+
+function dropSqliteLegacyFinanceTable(db: Database.Database) {
+  db.exec("DROP TABLE IF EXISTS finance_transactions")
+}
+
+function getSqliteStoredFinanceRecords(db: Database.Database) {
+  const rows = db.prepare(`
+    select id, no, type, tx_date as date, category, buyer, stock, vol, sisa, harga, jumlah, notes, created_at
+    from finance_income
+    union all
+    select id, no, type, tx_date as date, category, buyer, stock, vol, sisa, harga, jumlah, notes, created_at
+    from finance_expense
+    union all
+    select id, no, type, tx_date as date, category, buyer, stock, vol, sisa, harga, jumlah, notes, created_at
+    from finance_warist
+    order by date desc, created_at desc
+  `).all() as Array<{
+    id: string
+    no: string
+    type: string
+    date: string
+    category: string
+    buyer: string
+    stock?: number
+    vol: number
+    sisa?: number
+    harga?: number
+    jumlah: number
+    notes: string
+  }>
+
+  return rows.map(mapRow)
+}
+
+function upsertSqliteFinanceRecord(db: Database.Database, tx: FinanceTransaction) {
+  const table = tableForType(tx.type)
+  db.prepare(`
+    insert into ${table} (id, no, type, tx_date, category, buyer, stock, vol, sisa, harga, jumlah, notes, updated_at)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    on conflict(id) do update set
+      no = excluded.no,
+      type = excluded.type,
+      tx_date = excluded.tx_date,
+      category = excluded.category,
+      buyer = excluded.buyer,
+      stock = excluded.stock,
+      vol = excluded.vol,
+      sisa = excluded.sisa,
+      harga = excluded.harga,
+      jumlah = excluded.jumlah,
+      notes = excluded.notes,
+      updated_at = datetime('now')
+  `).run(tx.id, tx.no, tx.type, tx.date, tx.category, tx.buyer, tx.stock ?? null, tx.vol, tx.sisa ?? null, tx.harga ?? null, tx.jumlah, tx.notes)
+}
+
+async function prepareSqliteFinanceDatabase() {
+  initSqliteDatabase()
+  const db = getSqliteDb()
+  ensureSqliteTypedFinanceTables(db)
+
+  const storedRecords = getSqliteStoredFinanceRecords(db)
+  const legacyRecords = getSqliteLegacyFinanceRecords(db)
+  const baseRecords = storedRecords.length > 0 || legacyRecords.length > 0 ? [...storedRecords, ...legacyRecords] : SEED_TRANSACTIONS
+  const displayedRecords = mergeDisplayedTransactions(baseRecords, await getSheetTransactions())
+  const transaction = db.transaction((records: FinanceTransaction[]) => {
+    for (const tx of records) {
+      upsertSqliteFinanceRecord(db, tx)
+    }
+    dropSqliteLegacyFinanceTable(db)
+  })
+
+  transaction(displayedRecords)
+  return db
+}
+
+async function getSqliteFinanceRecords() {
+  const db = await prepareSqliteFinanceDatabase()
+  return sortTransactions(getSqliteStoredFinanceRecords(db))
+}
+
+/**
+ * Mirror Supabase finance records into the local SQLite cache.
+ * Called after a successful Supabase read so SQLite stays in sync.
+ * Throttled: only runs at most once per 5 minutes.
+ */
+let lastSqliteMirrorTime = 0
+const MIRROR_INTERVAL = 300_000 // 5 minutes
+
+function mirrorSupabaseToSqlite(records: FinanceTransaction[]) {
+  const now = Date.now()
+  if (now - lastSqliteMirrorTime < MIRROR_INTERVAL) return
+  lastSqliteMirrorTime = now
+
+  try {
+    const db = getSqliteDb()
+    ensureSqliteTypedFinanceTables(db)
+
+    // Count existing SQLite records
+    const sqliteCount = getSqliteStoredFinanceRecords(db).length
+    if (sqliteCount === records.length) return // already in sync
+
+    console.log(`[finance-db] Mirroring ${records.length} Supabase records to SQLite (was ${sqliteCount})`)
+    const transaction = db.transaction((txs: FinanceTransaction[]) => {
+      // Clear and repopulate SQLite to match Supabase exactly
+      for (const table of Object.values(TABLE_BY_TYPE)) {
+        db.prepare(`DELETE FROM ${table}`).run()
+      }
+      for (const tx of txs) {
+        upsertSqliteFinanceRecord(db, tx)
+      }
+    })
+    transaction(records)
+  } catch (e) {
+    console.warn("[finance-db] SQLite mirror failed (non-critical):", (e as Error).message)
+  }
 }
 
 export async function getFinanceTransactions(): Promise<FinanceTransaction[]> {
@@ -291,26 +698,15 @@ export async function getFinanceTransactions(): Promise<FinanceTransaction[]> {
 
   try {
     const pool = getDbPool()
-    await ensureFinanceTable(pool)
-    await seedFinanceIfEmpty(pool)
+    // Seed from xlsx only if tables are completely empty
+    await seedSupabaseFromSheetsIfEmpty(pool)
+    // Direct read from Supabase — CRUD changes are always reflected
+    const records = sortTransactions(await getStoredFinanceRecords(pool))
 
-    const { rows } = await pool.query(`
-      select
-        id,
-        no,
-        type,
-        tx_date::text as date,
-        category,
-        buyer,
-        vol::text as vol,
-        jumlah,
-        notes
-      from finance_transactions
-      where type != 'investor_income'
-      order by tx_date desc, created_at desc
-    `)
+    // Mirror Supabase records to local SQLite to keep it in sync
+    mirrorSupabaseToSqlite(records)
 
-    return mergeSheetTransactions(rows.map(mapRow))
+    return records
   } catch (error) {
     forceSqliteMode()
     console.warn("PostgreSQL unavailable for finance, falling back to SQLite:", error)
@@ -318,179 +714,127 @@ export async function getFinanceTransactions(): Promise<FinanceTransaction[]> {
   }
 }
 
+
+
 export async function createFinanceTransaction(input: FinanceTransactionInput) {
   const id = crypto.randomUUID()
   const no = input.category === "Penjualan Warist"
     ? `TX-WARIST-${Date.now().toString().slice(-6)}`
     : txNo(input.type, id)
+  const record = { ...input, id, no }
 
   if (getDbMode() === "sqlite") {
-    const db = prepareSqliteFinanceDatabase()
-    db.prepare(
-      `insert into finance_transactions (id, no, type, tx_date, category, buyer, vol, jumlah, notes)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, no, input.type, input.date, input.category, input.buyer, input.vol, input.jumlah, input.notes)
-    return { id, no, type: input.type, date: input.date, category: input.category, buyer: input.buyer, vol: input.vol, jumlah: input.jumlah, notes: input.notes }
+    const db = await prepareSqliteFinanceDatabase()
+    upsertSqliteFinanceRecord(db, record)
+    return record
   }
 
   try {
     const pool = getDbPool()
-    const { rows } = await pool.query(
-      `insert into finance_transactions (id, no, type, tx_date, category, buyer, vol, jumlah, notes)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       returning id, no, type, tx_date::text as date, category, buyer, vol::text as vol, jumlah, notes`,
-      [id, no, input.type, input.date, input.category, input.buyer, input.vol, input.jumlah, input.notes],
-    )
-    return mapRow(rows[0])
+    await ensureTypedFinanceTables(pool)
+    await upsertFinanceRecord(pool, record)
+    return record
   } catch (error) {
-    if (!shouldFallbackToSqlite(error)) {
-      throw error
-    }
-
+    if (!shouldFallbackToSqlite(error)) throw error
     forceSqliteMode()
     console.warn("PostgreSQL unavailable for finance create, falling back to SQLite:", error)
-    const db = prepareSqliteFinanceDatabase()
-    db.prepare(
-      `insert into finance_transactions (id, no, type, tx_date, category, buyer, vol, jumlah, notes)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, no, input.type, input.date, input.category, input.buyer, input.vol, input.jumlah, input.notes)
-    return { id, no, type: input.type, date: input.date, category: input.category, buyer: input.buyer, vol: input.vol, jumlah: input.jumlah, notes: input.notes }
+    const db = await prepareSqliteFinanceDatabase()
+    upsertSqliteFinanceRecord(db, record)
+    return record
   }
 }
 
 export async function updateFinanceTransaction(id: string, input: FinanceTransactionInput) {
   if (getDbMode() === "sqlite") {
-    const db = prepareSqliteFinanceDatabase()
-    const result = db.prepare(
-      `update finance_transactions
-       set type = ?,
-           tx_date = ?,
-           category = ?,
-           buyer = ?,
-           vol = ?,
-           jumlah = ?,
-           notes = ?,
-           updated_at = datetime('now')
-       where id = ?`
-    ).run(input.type, input.date, input.category, input.buyer, input.vol, input.jumlah, input.notes, id)
+    const db = await prepareSqliteFinanceDatabase()
+    const existing = getSqliteStoredFinanceRecords(db).find(tx => tx.id === id)
+    if (!existing) throw new Error("Transaksi finance tidak ditemukan.")
 
-    if (result.changes === 0) {
-      throw new Error("Transaksi finance tidak ditemukan.")
+    for (const table of Object.values(TABLE_BY_TYPE)) {
+      db.prepare(`delete from ${table} where id = ?`).run(id)
     }
 
-    const row = db.prepare(`
-      select id, no, type, tx_date as date, category, buyer, vol, jumlah, notes
-      from finance_transactions
-      where id = ?
-    `).get(id) as {
-      id: string
-      no: string
-      type: FinanceTxType
-      date: string
-      category: string
-      buyer: string
-      vol: number
-      jumlah: number
-      notes: string
-    }
-
-    return mapRow(row)
+    const record = { ...input, id, no: existing.no }
+    upsertSqliteFinanceRecord(db, record)
+    return record
   }
 
   try {
     const pool = getDbPool()
-    const { rows } = await pool.query(
-      `update finance_transactions
-       set type = $2,
-           tx_date = $3,
-           category = $4,
-           buyer = $5,
-           vol = $6,
-           jumlah = $7,
-           notes = $8,
-           updated_at = now()
-       where id = $1
-       returning id, no, type, tx_date::text as date, category, buyer, vol::text as vol, jumlah, notes`,
-      [id, input.type, input.date, input.category, input.buyer, input.vol, input.jumlah, input.notes],
-    )
+    await ensureTypedFinanceTables(pool)
+    const existing = (await getStoredFinanceRecords(pool)).find(tx => tx.id === id)
+    if (!existing) throw new Error("Transaksi finance tidak ditemukan.")
 
-    if (!rows[0]) {
-      throw new Error("Transaksi finance tidak ditemukan.")
-    }
-
-    return mapRow(rows[0])
-  } catch (error) {
-    if (!shouldFallbackToSqlite(error)) {
+    const client = await pool.connect()
+    try {
+      await client.query("begin")
+      for (const table of Object.values(TABLE_BY_TYPE)) {
+        await client.query(`delete from ${table} where id = $1`, [id])
+      }
+      const record = { ...input, id, no: existing.no }
+      const table = tableForType(record.type)
+      await client.query(
+        `insert into ${table} (id, no, type, tx_date, category, buyer, stock, vol, sisa, harga, jumlah, notes, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())`,
+        [record.id, record.no, record.type, record.date, record.category, record.buyer, record.stock ?? null, record.vol, record.sisa ?? null, record.harga ?? null, record.jumlah, record.notes],
+      )
+      await client.query("commit")
+      return record
+    } catch (error) {
+      await client.query("rollback")
       throw error
+    } finally {
+      client.release()
     }
-
+  } catch (error) {
+    if (!shouldFallbackToSqlite(error)) throw error
     forceSqliteMode()
     console.warn("PostgreSQL unavailable for finance update, falling back to SQLite:", error)
-    const db = prepareSqliteFinanceDatabase()
-    const result = db.prepare(
-      `update finance_transactions
-       set type = ?,
-           tx_date = ?,
-           category = ?,
-           buyer = ?,
-           vol = ?,
-           jumlah = ?,
-           notes = ?,
-           updated_at = datetime('now')
-       where id = ?`
-    ).run(input.type, input.date, input.category, input.buyer, input.vol, input.jumlah, input.notes, id)
-
-    if (result.changes === 0) {
-      throw new Error("Transaksi finance tidak ditemukan.")
+    const db = await prepareSqliteFinanceDatabase()
+    const existing = getSqliteStoredFinanceRecords(db).find(tx => tx.id === id)
+    if (!existing) throw new Error("Transaksi finance tidak ditemukan.")
+    for (const table of Object.values(TABLE_BY_TYPE)) {
+      db.prepare(`delete from ${table} where id = ?`).run(id)
     }
-
-    const row = db.prepare(`
-      select id, no, type, tx_date as date, category, buyer, vol, jumlah, notes
-      from finance_transactions
-      where id = ?
-    `).get(id) as {
-      id: string
-      no: string
-      type: FinanceTxType
-      date: string
-      category: string
-      buyer: string
-      vol: number
-      jumlah: number
-      notes: string
-    }
-
-    return mapRow(row)
+    const record = { ...input, id, no: existing.no }
+    upsertSqliteFinanceRecord(db, record)
+    return record
   }
 }
 
 export async function deleteFinanceTransaction(id: string) {
   if (getDbMode() === "sqlite") {
-    const db = prepareSqliteFinanceDatabase()
-    const result = db.prepare(`delete from finance_transactions where id = ?`).run(id)
-    if (result.changes === 0) {
-      throw new Error("Transaksi finance tidak ditemukan.")
-    }
+    const db = await prepareSqliteFinanceDatabase()
+    const changes = Object.values(TABLE_BY_TYPE).reduce((total, table) => total + db.prepare(`delete from ${table} where id = ?`).run(id).changes, 0)
+    if (changes === 0) throw new Error("Transaksi finance tidak ditemukan.")
     return
   }
 
   try {
     const pool = getDbPool()
-    const result = await pool.query("delete from finance_transactions where id = $1", [id])
-    if (result.rowCount === 0) {
-      throw new Error("Transaksi finance tidak ditemukan.")
+    await ensureTypedFinanceTables(pool)
+    const client = await pool.connect()
+    try {
+      await client.query("begin")
+      let changes = 0
+      for (const table of Object.values(TABLE_BY_TYPE)) {
+        const result = await client.query(`delete from ${table} where id = $1`, [id])
+        changes += result.rowCount ?? 0
+      }
+      if (changes === 0) throw new Error("Transaksi finance tidak ditemukan.")
+      await client.query("commit")
+    } catch (error) {
+      await client.query("rollback")
+      throw error
+    } finally {
+      client.release()
     }
   } catch (error) {
-    if (!shouldFallbackToSqlite(error)) {
-      throw error
-    }
-
+    if (!shouldFallbackToSqlite(error)) throw error
     forceSqliteMode()
     console.warn("PostgreSQL unavailable for finance delete, falling back to SQLite:", error)
-    const db = prepareSqliteFinanceDatabase()
-    const result = db.prepare(`delete from finance_transactions where id = ?`).run(id)
-    if (result.changes === 0) {
-      throw new Error("Transaksi finance tidak ditemukan.")
-    }
+    const db = await prepareSqliteFinanceDatabase()
+    const changes = Object.values(TABLE_BY_TYPE).reduce((total, table) => total + db.prepare(`delete from ${table} where id = ?`).run(id).changes, 0)
+    if (changes === 0) throw new Error("Transaksi finance tidak ditemukan.")
   }
 }

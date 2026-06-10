@@ -1,10 +1,9 @@
 import { Pool } from "pg"
 import Database from "better-sqlite3"
 import { forceSqliteMode, getDbMode, getDbPool, getSqliteDb, initSqliteDatabase } from "./db"
-import { batches as seedBatches, vaksinasi as seedVaccinations, type Batch, type VaksinasiRecord } from "@/data/livestock"
+import { batches as seedBatches, type Batch, type VaksinasiRecord } from "@/data/livestock"
 
 export type LivestockBatchInput = Omit<Batch, "id">
-export type LivestockVaccinationInput = Omit<VaksinasiRecord, "no">
 
 async function ensureLivestockTables(pool: Pool) {
   await pool.query(`
@@ -16,21 +15,6 @@ async function ensureLivestockTables(pool: Pool) {
       bulan integer not null default 0 check (bulan >= 0),
       hari integer not null default 0 check (hari >= 0),
       status text not null check (status in ('active', 'partial', 'closed')),
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now()
-    )
-  `)
-
-  await pool.query(`
-    create table if not exists livestock_vaccinations (
-      no integer primary key,
-      tanggal date not null,
-      nama text not null,
-      qty integer not null check (qty > 0),
-      satuan text not null,
-      harga integer not null default 0 check (harga >= 0),
-      subtotal integer not null check (subtotal >= 0),
-      batch text not null,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
@@ -58,28 +42,8 @@ async function seedLivestockIfEmpty(pool: Pool) {
       client.release()
     }
   }
-
-  const vaccinationCount = await pool.query<{ count: string }>("select count(*) from livestock_vaccinations")
-  if (Number(vaccinationCount.rows[0]?.count ?? 0) === 0) {
-    const client = await pool.connect()
-    try {
-      await client.query("begin")
-      for (const item of seedVaccinations) {
-        const harga = item.harga ?? Math.round(item.subtotal / item.qty)
-        await client.query(
-          `insert into livestock_vaccinations (no, tanggal, nama, qty, satuan, harga, subtotal, batch)
-           values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [item.no, item.tanggal, item.nama, item.qty, item.satuan, harga, item.subtotal, item.batch],
-        )
-      }
-      await client.query("commit")
-    } catch (error) {
-      await client.query("rollback")
-      throw error
-    } finally {
-      client.release()
-    }
-  }
+  // Note: Vaccinations are now derived from finance_expense table
+  // No longer seeded from static data
 }
 
 function ensureSqliteLivestockTables(db: Database.Database) {
@@ -95,20 +59,9 @@ function ensureSqliteLivestockTables(db: Database.Database) {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-
-    CREATE TABLE IF NOT EXISTS livestock_vaccinations (
-      no INTEGER PRIMARY KEY,
-      tanggal TEXT NOT NULL,
-      nama TEXT NOT NULL,
-      qty INTEGER NOT NULL CHECK (qty > 0),
-      satuan TEXT NOT NULL,
-      harga INTEGER NOT NULL DEFAULT 0 CHECK (harga >= 0),
-      subtotal INTEGER NOT NULL CHECK (subtotal >= 0),
-      batch TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
   `)
+  // Note: livestock_vaccinations table is no longer needed
+  // Vaccinations are now derived from finance_expense
 }
 
 function seedSqliteLivestockIfEmpty(db: Database.Database) {
@@ -125,21 +78,7 @@ function seedSqliteLivestockIfEmpty(db: Database.Database) {
     })
     transaction(seedBatches)
   }
-
-  const vaccinationCount = db.prepare("select count(*) as count from livestock_vaccinations").get() as { count: number }
-  if (Number(vaccinationCount.count ?? 0) === 0) {
-    const insert = db.prepare(
-      `insert into livestock_vaccinations (no, tanggal, nama, qty, satuan, harga, subtotal, batch)
-       values (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    const transaction = db.transaction((records: VaksinasiRecord[]) => {
-      for (const item of records) {
-        const harga = item.harga ?? Math.round(item.subtotal / item.qty)
-        insert.run(item.no, item.tanggal, item.nama, item.qty, item.satuan, harga, item.subtotal, item.batch)
-      }
-    })
-    transaction(seedVaccinations)
-  }
+  // Note: Vaccinations are now derived from finance_expense
 }
 
 function prepareSqliteLivestockDatabase() {
@@ -442,108 +381,8 @@ export async function deleteLivestockBatch(id: string) {
   }
 }
 
-export async function createLivestockVaccination(input: LivestockVaccinationInput) {
-  if (getDbMode() === "sqlite") {
-    const db = prepareSqliteLivestockDatabase()
-    const maxRow = db.prepare("select max(no) as max_no from livestock_vaccinations").get() as { max_no?: number | null }
-    const no = Number(maxRow.max_no ?? 0) + 1
-
-    db.prepare(
-      `insert into livestock_vaccinations (no, tanggal, nama, qty, satuan, harga, subtotal, batch)
-       values (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(no, input.tanggal, input.nama, input.qty, input.satuan, input.harga ?? 0, input.subtotal, input.batch)
-
-    return {
-      no,
-      tanggal: input.tanggal,
-      nama: input.nama,
-      qty: input.qty,
-      satuan: input.satuan,
-      harga: input.harga ?? 0,
-      subtotal: input.subtotal,
-      batch: input.batch,
-    }
-  }
-
-  const pool = await prepareLivestockDatabase()
-  const { rows: maxRows } = await pool.query<{ max_no: string | null }>("select max(no) as max_no from livestock_vaccinations")
-  const no = Number(maxRows[0]?.max_no ?? 0) + 1
-
-  const { rows } = await pool.query(
-    `insert into livestock_vaccinations (no, tanggal, nama, qty, satuan, harga, subtotal, batch)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)
-     returning no, tanggal::text as tanggal, nama, qty, satuan, harga, subtotal, batch`,
-    [no, input.tanggal, input.nama, input.qty, input.satuan, input.harga ?? 0, input.subtotal, input.batch],
-  )
-
-  return mapVaccination(rows[0])
-}
-
-export async function updateLivestockVaccination(no: number, input: LivestockVaccinationInput) {
-  if (getDbMode() === "sqlite") {
-    const db = prepareSqliteLivestockDatabase()
-    const result = db.prepare(
-      `update livestock_vaccinations
-       set tanggal = ?,
-           nama = ?,
-           qty = ?,
-           satuan = ?,
-           harga = ?,
-           subtotal = ?,
-           batch = ?,
-           updated_at = datetime('now')
-       where no = ?`
-    ).run(input.tanggal, input.nama, input.qty, input.satuan, input.harga ?? 0, input.subtotal, input.batch, no)
-
-    if (result.changes === 0) {
-      throw new Error("Record vaksinasi tidak ditemukan.")
-    }
-
-    return {
-      no,
-      tanggal: input.tanggal,
-      nama: input.nama,
-      qty: input.qty,
-      satuan: input.satuan,
-      harga: input.harga ?? 0,
-      subtotal: input.subtotal,
-      batch: input.batch,
-    }
-  }
-
-  const pool = await prepareLivestockDatabase()
-  const { rows } = await pool.query(
-    `update livestock_vaccinations
-     set tanggal = $2,
-         nama = $3,
-         qty = $4,
-         satuan = $5,
-         harga = $6,
-         subtotal = $7,
-         batch = $8,
-         updated_at = now()
-     where no = $1
-     returning no, tanggal::text as tanggal, nama, qty, satuan, harga, subtotal, batch`,
-    [no, input.tanggal, input.nama, input.qty, input.satuan, input.harga ?? 0, input.subtotal, input.batch],
-  )
-
-  if (!rows[0]) {
-    throw new Error("Record vaksinasi tidak ditemukan.")
-  }
-
-  return mapVaccination(rows[0])
-}
-
-export async function deleteLivestockVaccination(no: number) {
-  if (getDbMode() === "sqlite") {
-    const db = prepareSqliteLivestockDatabase()
-    const result = db.prepare(`delete from livestock_vaccinations where no = ?`).run(no)
-    if (result.changes === 0) {
-      throw new Error("Record vaksinasi tidak ditemukan.")
-    }
-    return
-  }
-
-  const pool = await prepareLivestockDatabase()
-  await pool.query("delete from livestock_vaccinations where no = $1", [no])
-}
+// Note: Vaccination CRUD functions have been removed.
+// Vaccinations are now derived from finance_expense table.
+// To add/edit/delete vaccinations, use the Finance page (Pengeluaran tab)
+// with categories containing "vaksin" (e.g., "Vaksin ND Lasota", "Vaksin & Vitamin").
+// The vaccination records will automatically appear in the Livestock page.

@@ -19,7 +19,10 @@ function toFinanceInput(form: {
   date: string
   category: string
   buyer: string
+  stock?: number
   vol: number
+  sisa?: number
+  harga?: number
   jumlah: number
   notes: string
 }): FinanceTransactionInput {
@@ -37,7 +40,7 @@ function toFinanceInput(form: {
   }
 
   if (!Number.isFinite(form.vol) || form.vol < 0) {
-    throw new Error("Volume harus berupa angka 0 atau lebih.")
+    throw new Error("Volume harus berupa angka desimal 0 atau lebih.")
   }
 
   if (!Number.isFinite(form.jumlah) || form.jumlah < 0) {
@@ -49,7 +52,10 @@ function toFinanceInput(form: {
     date: form.date,
     category: form.category.trim(),
     buyer: form.buyer.trim(),
+    stock: form.stock != null && Number.isFinite(form.stock) ? Number(form.stock) : undefined,
     vol: Number(form.vol),
+    sisa: form.sisa != null && Number.isFinite(form.sisa) ? Number(form.sisa) : undefined,
+    harga: form.harga != null && Number.isFinite(form.harga) ? Number(form.harga) : undefined,
     jumlah: Math.round(Number(form.jumlah)),
     notes: form.notes.trim(),
   }
@@ -62,7 +68,10 @@ export async function saveFinanceTransactionAction(
     date: string
     category: string
     buyer: string
+    stock?: number
     vol: number
+    sisa?: number
+    harga?: number
     jumlah: number
     notes: string
   },
@@ -78,6 +87,7 @@ export async function saveFinanceTransactionAction(
 
   revalidatePath("/finance")
   revalidatePath("/dashboard")
+  revalidatePath("/livestock")  // livestock derives from finance data
 
   return transaction
 }
@@ -99,4 +109,5 @@ export async function deleteFinanceTransactionAction(id: string) {
 
   revalidatePath("/finance")
   revalidatePath("/dashboard")
+  revalidatePath("/livestock")  // livestock derives from finance data
 }

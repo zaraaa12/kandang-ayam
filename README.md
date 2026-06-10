@@ -100,7 +100,9 @@ Aplikasi ini menggunakan **Supabase PostgreSQL** sebagai database. Untuk setup d
 
 ### Fitur Database yang Tersedia:
 - ✅ **produksi_records** — Data produksi telur harian
-- ✅ **finance_transactions** — Transaksi keuangan
+- ✅ **finance_income** — Data pemasukan finance
+- ✅ **finance_expense** — Data pengeluaran finance
+- ✅ **finance_warist** — Dana terpisah Warist
 - ✅ **livestock_batches** — Batch kandang ayam
 - ✅ **livestock_vaccinations** — Riwayat vaksinasi
 - ✅ **inventory_items** — Item inventory

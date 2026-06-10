@@ -10,7 +10,9 @@ ALTER TABLE public.inventory_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.livestock_batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.livestock_vaccinations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.produksi_records ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.finance_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.finance_income ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.finance_expense ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.finance_warist ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================================
 -- 2. DROP EXISTING POLICIES (jika ada dari run sebelumnya)
@@ -21,7 +23,9 @@ DROP POLICY IF EXISTS "Allow authenticated access on inventory_items" ON public.
 DROP POLICY IF EXISTS "Allow authenticated access on livestock_batches" ON public.livestock_batches;
 DROP POLICY IF EXISTS "Allow authenticated access on livestock_vaccinations" ON public.livestock_vaccinations;
 DROP POLICY IF EXISTS "Allow authenticated access on produksi_records" ON public.produksi_records;
-DROP POLICY IF EXISTS "Allow authenticated access on finance_transactions" ON public.finance_transactions;
+DROP POLICY IF EXISTS "Allow authenticated access on finance_income" ON public.finance_income;
+DROP POLICY IF EXISTS "Allow authenticated access on finance_expense" ON public.finance_expense;
+DROP POLICY IF EXISTS "Allow authenticated access on finance_warist" ON public.finance_warist;
 
 -- ============================================================================
 -- 3. CREATE POLICIES - Izinkan semua authenticated user untuk SELECT/INSERT/UPDATE/DELETE
@@ -62,9 +66,23 @@ CREATE POLICY "Allow authenticated access on produksi_records"
   USING (auth.role() = 'authenticated')
   WITH CHECK (auth.role() = 'authenticated');
 
--- Policy untuk finance_transactions table
-CREATE POLICY "Allow authenticated access on finance_transactions"
-  ON public.finance_transactions
+-- Policy untuk finance_income table
+CREATE POLICY "Allow authenticated access on finance_income"
+  ON public.finance_income
+  FOR ALL
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Policy untuk finance_expense table
+CREATE POLICY "Allow authenticated access on finance_expense"
+  ON public.finance_expense
+  FOR ALL
+  USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+
+-- Policy untuk finance_warist table
+CREATE POLICY "Allow authenticated access on finance_warist"
+  ON public.finance_warist
   FOR ALL
   USING (auth.role() = 'authenticated')
   WITH CHECK (auth.role() = 'authenticated');
@@ -74,7 +92,7 @@ CREATE POLICY "Allow authenticated access on finance_transactions"
 -- - Policies di atas membolehkan semua authenticated user melakukan operasi apapun
 --   (SELECT, INSERT, UPDATE, DELETE) pada semua tabel.
 -- - Tabel-tabel: users, inventory_items, livestock_batches, livestock_vaccinations,
---   produksi_records, finance_transactions.
+--   produksi_records, finance_income, finance_expense, finance_warist.
 -- - Pastikan Anda sudah membuat user di Supabase auth sebelum melakukan operasi.
 -- - Untuk aplikasi server-side yang menggunakan service_role, RLS tidak berlaku.
 -- ============================================================================
@@ -93,6 +111,8 @@ WHERE table_schema = 'public'
     'livestock_batches',
     'livestock_vaccinations',
     'produksi_records',
-    'finance_transactions'
+    'finance_income',
+    'finance_expense',
+    'finance_warist'
   )
 ORDER BY table_name;

@@ -1,10 +1,9 @@
-import { getExpenseSheetTransactions, type SheetFinanceTx } from "@/lib/expense-sheet"
-import { getIncomeSheetTransactions } from "@/lib/income-sheet"
-import type { FinanceTransaction } from "@/lib/finance-db"
+import { getFinanceTransactions, type FinanceTransaction } from "@/lib/finance-db"
 import {
   biayaPembesaran as fallbackBiayaPembesaran,
   pengadaanAyam as fallbackPengadaanAyam,
   stokTelurBulanan as fallbackStokTelurBulanan,
+  calculateFlockSummary,
   type Batch,
   type PengadaanAyam,
   type StokTelurBulan,
@@ -13,12 +12,15 @@ import {
 
 type BiayaPembesaranItem = typeof fallbackBiayaPembesaran[number]
 
+type FlockSummary = ReturnType<typeof calculateFlockSummary>
+
 export type FinanceLivestockData = {
   batches: Batch[]
   vaccinations: VaksinasiRecord[]
   pengadaanAyam: PengadaanAyam[]
   biayaPembesaran: BiayaPembesaranItem[]
   stokTelurBulanan: StokTelurBulan[]
+  flockSummary: FlockSummary
 }
 
 const BIAYA_COLORS = {
@@ -122,7 +124,7 @@ function batchIdsForDate(date: string, batches: Batch[]) {
 
 function deriveVaccinations(expenses: FinanceTransaction[], batches: Batch[], existingVaccinations: VaksinasiRecord[]) {
   const records = expenses
-    .filter(tx => /vaksin/i.test(tx.category))
+    .filter(tx => /vaksin|vitamin|obat|trimezyn|neobro/i.test(tx.category))
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((tx, index) => ({
       no: index + 1,
@@ -175,7 +177,7 @@ function monthLabel(period: string) {
   return `${label} '${String(year).slice(-2)}`
 }
 
-function deriveStokTelurBulanan(eggSales: SheetFinanceTx[]): StokTelurBulan[] {
+function deriveStokTelurBulanan(eggSales: FinanceTransaction[]): StokTelurBulan[] {
   const byMonth = new Map<string, StokTelurBulan & { lastDate: string }>()
 
   for (const tx of eggSales) {
@@ -223,14 +225,25 @@ export async function getFinanceLivestockData(
   existingBatches: Batch[],
   existingVaccinations: VaksinasiRecord[],
 ): Promise<FinanceLivestockData> {
-  const [eggSales, expenses] = await Promise.all([
-    Promise.resolve(getExpenseSheetTransactions()),
-    getIncomeSheetTransactions(),
-  ])
+  // Get all finance transactions (includes income with egg sales, expenses with vaccines, etc.)
+  const allTransactions = await getFinanceTransactions()
+  
+  // Filter for expense transactions (pengeluaran) - this includes vaccines, pakan, etc.
+  const expenses = allTransactions.filter(tx => tx.type === "expense")
+
+  // Filter for income transactions with egg sales data (from income.xlsx / finance_income table)
+  // These contain stock (STOCK TELUR), vol (TERJUAL), and sisa (SISA TELUR) fields
+  const eggSales = allTransactions.filter(tx => tx.type === "income")
 
   const pengadaanAyam = derivePengadaanAyam(expenses)
   const batches = deriveBatches(pengadaanAyam, existingBatches)
   const vaccinations = deriveVaccinations(expenses, batches, existingVaccinations)
+
+  // Derive flock population from finance: warist transactions = actual ayam afkir/cull sales
+  const waristTransactions = allTransactions.filter(tx => tx.type === "warist")
+  const totalDijual = waristTransactions.length > 0
+    ? waristTransactions.reduce((sum, tx) => sum + Math.round(Number(tx.vol) || 0), 0)
+    : undefined  // fallback to batch-status estimation
 
   return {
     batches,
@@ -238,5 +251,6 @@ export async function getFinanceLivestockData(
     pengadaanAyam,
     biayaPembesaran: deriveBiayaPembesaran(expenses),
     stokTelurBulanan: deriveStokTelurBulanan(eggSales),
+    flockSummary: calculateFlockSummary(batches, totalDijual),
   }
 }

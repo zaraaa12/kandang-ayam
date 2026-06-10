@@ -65,7 +65,9 @@ Script ini akan:
 - Menguji koneksi ke database
 - Membuat tabel-tabel yang diperlukan:
   - `produksi_records` — Data produksi telur harian
-  - `finance_transactions` — Transaksi keuangan
+  - `finance_income` - Data pemasukan finance
+  - `finance_expense` - Data pengeluaran finance
+  - `finance_warist` - Dana terpisah Warist
   - `livestock_batches` — Batch kandang ayam
   - `livestock_vaccinations` — Riwayat vaksinasi
   - `inventory_items` — Item inventory
@@ -106,7 +108,9 @@ Output yang diharapkan:
 📋 Initializing database tables...
 ✅ Database tables created successfully!
    - produksi_records
-   - finance_transactions
+   - finance_income
+   - finance_expense
+   - finance_warist
    - livestock_batches
    - livestock_vaccinations
    - inventory_items
@@ -117,7 +121,7 @@ Output yang diharapkan:
 - Buka [Supabase Dashboard](https://app.supabase.com)
 - Pilih project Anda
 - Pergi ke **Table Editor**
-- Anda akan melihat 5 tabel yang telah dibuat
+- Anda akan melihat tabel-tabel aplikasi yang telah dibuat
 
 ---
 
@@ -155,18 +159,21 @@ Data produksi telur harian.
 | ayam | integer | Jumlah ayam |
 | hdp | numeric | Hen Day Production (%) |
 
-### `finance_transactions`
-Transaksi keuangan (penjualan & pengeluaran).
+### `finance_income`, `finance_expense`, `finance_warist`
+Transaksi keuangan dipisah per jenis data.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | id | text | Primary key (UUID) |
 | no | text | Nomor transaksi (unique) |
-| type | text | 'sale' atau 'expense' |
+| type | text | `income`, `expense`, atau `warist` sesuai tabel |
 | tx_date | date | Tanggal transaksi |
 | category | text | Kategori |
 | buyer | text | Pembeli/supplier |
+| stock | numeric | Stok telur (opsional) |
 | vol | numeric | Volume |
+| sisa | numeric | Sisa stok (opsional) |
+| harga | integer | Harga per unit (opsional) |
 | jumlah | integer | Jumlah (Rp) |
 | notes | text | Catatan |
 

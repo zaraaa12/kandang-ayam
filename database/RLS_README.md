@@ -10,13 +10,15 @@ Tabel yang benar adalah **`produksi_records`** (bukan `produksi`). File RLS_SETU
 - Buka **Supabase Dashboard** → **SQL Editor**
 - Buat **New Query** dan paste isi dari `database/RLS_DIAGNOSTIC.sql`
 - **Run** query
-- Pastikan output menunjukkan 6 tabel:
+- Pastikan output menunjukkan 8 tabel:
   - `users`
   - `inventory_items`
   - `livestock_batches`
   - `livestock_vaccinations`
   - `produksi_records` ✅ (bukan produksi)
-  - `finance_transactions`
+  - `finance_income`
+  - `finance_expense`
+  - `finance_warist`
 
 Jika ada yang hilang, jalankan `database/schema.sql` terlebih dahulu.
 
@@ -26,7 +28,7 @@ Jika ada yang hilang, jalankan `database/schema.sql` terlebih dahulu.
 - **Run** query
 
 Script akan:
-1. Enable RLS pada 6 tabel
+1. Enable RLS pada 8 tabel
 2. Drop existing policies (jika ada dari run sebelumnya)
 3. Create policy baru untuk semua authenticated user (full access: SELECT/INSERT/UPDATE/DELETE)
 
@@ -36,7 +38,7 @@ Script akan:
 - Jalankan lagi `database/RLS_DIAGNOSTIC.sql`
 - Pastikan:
   - RLS Enabled: semua TRUE
-  - Policies: 6 policies sudah tercipta (satu per tabel)
+  - Policies: 8 policies sudah tercipta (satu per tabel)
 
 ## Catatan Penting
 

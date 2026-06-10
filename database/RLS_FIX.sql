@@ -5,13 +5,10 @@
 -- Drop policies dari produksi_records
 DROP POLICY IF EXISTS "Full CRUD produksi" ON public.produksi_records;
 
--- Drop policies dari finance_transactions
-DROP POLICY IF EXISTS "Allow authenticated access on finance_transactions" ON public.finance_transactions;
-DROP POLICY IF EXISTS "Enable delete access" ON public.finance_transactions;
-DROP POLICY IF EXISTS "Enable insert access" ON public.finance_transactions;
-DROP POLICY IF EXISTS "Enable read access" ON public.finance_transactions;
-DROP POLICY IF EXISTS "Enable update access" ON public.finance_transactions;
-DROP POLICY IF EXISTS "Full CRUD finance" ON public.finance_transactions;
+-- Drop policies dari tabel finance baru
+DROP POLICY IF EXISTS "Allow authenticated access on finance_income" ON public.finance_income;
+DROP POLICY IF EXISTS "Allow authenticated access on finance_expense" ON public.finance_expense;
+DROP POLICY IF EXISTS "Allow authenticated access on finance_warist" ON public.finance_warist;
 
 -- Drop dari policies lain (jika ada)
 DROP POLICY IF EXISTS "Allow authenticated access on users" ON public.users;
@@ -26,7 +23,9 @@ DROP POLICY IF EXISTS "Inventory Items - Full access for authenticated" ON publi
 DROP POLICY IF EXISTS "Livestock Batches - Full access for authenticated" ON public.livestock_batches;
 DROP POLICY IF EXISTS "Livestock Vaccinations - Full access for authenticated" ON public.livestock_vaccinations;
 DROP POLICY IF EXISTS "Produksi Records - Full access for authenticated" ON public.produksi_records;
-DROP POLICY IF EXISTS "Finance Transactions - Full access for authenticated" ON public.finance_transactions;
+DROP POLICY IF EXISTS "Finance Income - Full access for authenticated" ON public.finance_income;
+DROP POLICY IF EXISTS "Finance Expense - Full access for authenticated" ON public.finance_expense;
+DROP POLICY IF EXISTS "Finance Warist - Full access for authenticated" ON public.finance_warist;
 
 -- ============================================================================
 -- CREATE POLICIES: Izinkan authenticated user full access (SELECT/INSERT/UPDATE/DELETE)
@@ -72,9 +71,25 @@ CREATE POLICY "Produksi Records - Full access for authenticated"
   USING (true)
   WITH CHECK (true);
 
--- Finance Transactions table
-CREATE POLICY "Finance Transactions - Full access for authenticated"
-  ON public.finance_transactions
+-- Finance Income table
+CREATE POLICY "Finance Income - Full access for authenticated"
+  ON public.finance_income
+  FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+-- Finance Expense table
+CREATE POLICY "Finance Expense - Full access for authenticated"
+  ON public.finance_expense
+  FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+-- Finance Warist table
+CREATE POLICY "Finance Warist - Full access for authenticated"
+  ON public.finance_warist
   FOR ALL
   TO authenticated
   USING (true)
@@ -101,8 +116,10 @@ WHERE schemaname = 'public'
     'livestock_batches',
     'livestock_vaccinations',
     'produksi_records',
-    'finance_transactions'
+    'finance_income',
+    'finance_expense',
+    'finance_warist'
   )
 ORDER BY tablename, policyname;
 
--- Expected: 6 rows (satu policy per tabel, semua dengan roles = {authenticated})
+-- Expected: 8 rows (satu policy per tabel, semua dengan roles = {authenticated})

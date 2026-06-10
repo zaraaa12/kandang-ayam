@@ -19,9 +19,7 @@ import {
 } from "@/data/livestock"
 import {
   deleteLivestockBatchAction,
-  deleteLivestockVaccinationAction,
   saveLivestockBatchAction,
-  saveLivestockVaccinationAction,
 } from "@/app/livestock/actions"
 
 // ─── Nav ─────────────────────────────────────────────────────────────────────
@@ -533,10 +531,19 @@ function VaksinasiModal({ mode, initial, batchIds, onSave, onClose }: {
 export default function LivestockClient({
   initialBatches,
   initialVaccinations,
+  initialStokTelurBulanan,
+  initialBiayaPembesaran,
+  initialFlockSummary,
 }: {
   initialBatches: Batch[]
   initialVaccinations: VaksinasiRecord[]
+  initialStokTelurBulanan?: typeof stokTelurBulanan
+  initialBiayaPembesaran?: typeof biayaPembesaran
+  initialFlockSummary?: typeof staticFlockSummary
 }) {
+  // Use dynamic data from finance if provided, otherwise fall back to static data
+  const stokData = initialStokTelurBulanan ?? stokTelurBulanan
+  const biayaData = initialBiayaPembesaran ?? biayaPembesaran
   const router = useRouter()
   const [, startTransition] = useTransition()
   // ─── Batch state ───────────────────────────────────────────────────────────
@@ -596,50 +603,26 @@ export default function LivestockClient({
   }
 
   // ─── Vaccination CRUD ──────────────────────────────────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function saveVak(data: any) {
-    const no = vakModal === "edit" ? editVak?.no ?? null : null
-    startTransition(async () => {
-      try {
-        const savedVak = await saveLivestockVaccinationAction(no, data)
-        if (vakModal==="add") {
-          setVakList(p => [...p, savedVak].sort((a, b) => a.no - b.no))
-          showToast("Record vaksinasi berhasil disimpan.")
-        } else if (editVak) {
-          setVakList(p => p.map(v => v.no===editVak.no ? savedVak : v))
-          showToast("Record vaksinasi berhasil diperbarui.")
-        }
-        setVakModal(null); setEditVak(null)
-        router.refresh()
-      } catch (error) {
-        showToast(error instanceof Error ? error.message : "Gagal menyimpan record vaksinasi.", "error")
-      }
-    })
+  // Note: Vaccinations are now managed through Finance page (Pengeluaran tab)
+  // Adding/editing/deleting vaccinations is done by managing expense transactions
+  // with categories containing "vaksin" in the Finance module.
+  function saveVak() {
+    showToast("Vaksinasi dikelola melalui halaman Finance > Pengeluaran. Tambahkan expense dengan kategori 'Vaksin & Vitamin'.", "error")
   }
   function confirmDeleteVak() {
-    if (!deleteVak) return
-    const vaccination = deleteVak
-    startTransition(async () => {
-      try {
-        await deleteLivestockVaccinationAction(vaccination.no)
-        setVakList(p => p.filter(v => v.no!==vaccination.no))
-        showToast("Record vaksinasi dihapus.", "error")
-        setDeleteVak(null)
-        router.refresh()
-      } catch (error) {
-        showToast(error instanceof Error ? error.message : "Gagal menghapus record vaksinasi.", "error")
-      }
-    })
+    showToast("Vaksinasi dikelola melalui halaman Finance > Pengeluaran. Hapus expense terkait untuk menghapus record vaksinasi.", "error")
+    setDeleteVak(null)
   }
 
   // ─── Dynamic flock summary & alerts ──────────────────────────────────────────
-  const flockSummary = calculateFlockSummary(batchList)
+  // Use real warist (sold) data from finance when available, otherwise estimate from batch status
+  const flockSummary = calculateFlockSummary(batchList, initialFlockSummary?.dijual)
   const livestockAlerts: LivestockAlert[] = generateLivestockAlerts(
     flockSummary,
     batchList,
     vakList,
-    stokTelurBulanan,
-    biayaPembesaran
+    stokData,
+    biayaData
   )
 
   const batchIds      = batchList.map(b => b.id)
@@ -814,13 +797,13 @@ export default function LivestockClient({
                   <div style={{ marginTop:20 }}>
                     <h4 style={{ fontSize:14, fontWeight:600, color:"#e5e2e1", margin:"0 0 12px" }}>Biaya Pembesaran DOC</h4>
                     <ResponsiveContainer width="100%" height={130}>
-                      <BarChart data={biayaPembesaran} margin={{ top:4, right:0, left:-15, bottom:0 }}>
+                      <BarChart data={biayaData} margin={{ top:4, right:0, left:-15, bottom:0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false}/>
                         <XAxis dataKey="kategori" tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false}/>
                         <YAxis tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false} tickFormatter={v=>rupiah(v,true)}/>
                         <Tooltip content={<DarkTip/>}/>
                         <Bar dataKey="jumlah" name="Biaya" radius={[4,4,0,0]}>
-                          {biayaPembesaran.map((d,i) => <Cell key={i} fill={d.warna} fillOpacity={0.85}/>)}
+                          {biayaData.map((d,i) => <Cell key={i} fill={d.warna} fillOpacity={0.85}/>)}
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -1006,10 +989,10 @@ export default function LivestockClient({
 
             {/* ═══ STOK TELUR ═══ */}
             {activeTab==="stok" && (() => {
-              const totalStok    = stokTelurBulanan.reduce((a,b) => a + b.stokKg, 0)
-              const totalTerjual = stokTelurBulanan.reduce((a,b) => a + b.terjualKg, 0)
-              const totalSisa    = stokTelurBulanan.reduce((a,b) => a + b.sisaKg, 0)
-              const lastBulan    = stokTelurBulanan[stokTelurBulanan.length - 1]
+              const totalStok    = stokData.reduce((a,b) => a + b.stokKg, 0)
+              const totalTerjual = stokData.reduce((a,b) => a + b.terjualKg, 0)
+              const totalSisa    = stokData.reduce((a,b) => a + b.sisaKg, 0)
+              const lastBulan    = stokData[stokData.length - 1]
               return (
                 <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
 
@@ -1046,7 +1029,7 @@ export default function LivestockClient({
                       </div>
                     </div>
                     <ResponsiveContainer width="100%" height={240}>
-                      <BarChart data={stokTelurBulanan} margin={{ top:4, right:4, left:-8, bottom:0 }} barGap={4}>
+                      <BarChart data={stokData} margin={{ top:4, right:4, left:-8, bottom:0 }} barGap={4}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#2e2e2e" vertical={false}/>
                         <XAxis dataKey="bulan" tick={{ fontSize:11, fill:"#bbcabf" }} tickLine={false} axisLine={false}/>
                         <YAxis tick={{ fontSize:10, fill:"#bbcabf" }} tickLine={false} axisLine={false} tickFormatter={v=>`${v}kg`}/>
@@ -1054,7 +1037,7 @@ export default function LivestockClient({
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           content={({ active, payload, label }:any) => {
                             if (!active || !payload?.length) return null
-                            const d = stokTelurBulanan.find(x=>x.bulan===label)
+                            const d = stokData.find(x=>x.bulan===label)
                             return (
                               <div style={{ background:"#201f1f", border:"1px solid #3c4a42", borderRadius:8, padding:"10px 14px", fontSize:12, minWidth:200 }}>
                                 <p style={{ color:"#bbcabf", marginBottom:8, fontWeight:700 }}>{label}</p>
@@ -1109,7 +1092,7 @@ export default function LivestockClient({
                           </tr>
                         </thead>
                         <tbody>
-                          {stokTelurBulanan.map((d,i)=>(
+                          {stokData.map((d,i)=>(
                             <tr key={i} className="tr">
                               <td style={{ padding:"13px 20px", fontSize:14, fontWeight:600, color:"#4edea3" }}>{d.bulan}</td>
                               <td style={{ padding:"13px 20px", textAlign:"right", fontSize:13 }}>{d.stokKg.toFixed(1)}</td>

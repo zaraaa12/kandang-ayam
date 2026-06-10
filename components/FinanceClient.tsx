@@ -6,7 +6,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { BarChart, Bar, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from "recharts"
 import { deleteFinanceTransactionAction, saveFinanceTransactionAction } from "@/app/finance/actions"
-import { biayaOperasional, rupiah } from "@/data/finance"
+import { rupiah } from "@/data/finance"
 import { deriveDynamicStokTelurBulanan } from "@/lib/livestock-utils"
 import type { StokTelurBulan } from "@/lib/livestock-utils"
 
@@ -155,6 +155,8 @@ function TxModal({
     category:   initial.category ?? "",
     buyer:      initial.buyer    ?? "",
     vol:        initial.vol      ?? 0,
+    stock:      initial.stock    ?? undefined,
+    sisa:       initial.sisa     ?? undefined,
     jumlah:     initial.jumlah   ?? 0,
     jumlahInput: initial.jumlah ? rupiah(initial.jumlah) : "",
     hargaInput:  initial.vol && initial.jumlah ? rupiah(Math.round(initial.jumlah / initial.vol)) : "",
@@ -316,9 +318,9 @@ function TxModal({
             {/* Qty — hanya untuk income, expense, warist */}
             {showVolume && (
               <div>
-                <label style={labelStyle}>Kuantitas</label>
+                <label style={labelStyle}>Kuantitas (Terjual)</label>
                 <input
-                  type="number" min={0} step={0.01}
+                  type="number" min={0} step="any"
                   value={form.vol || ""}
                   onChange={e => set("vol", +e.target.value)}
                   placeholder="0"
@@ -327,6 +329,36 @@ function TxModal({
                   onFocus={e => (e.target.style.borderColor = colors.highlight)}
                   onBlur={e => (e.target.style.borderColor = "#3c4a42")}
                 />
+              </div>
+            )}
+
+            {/* Stok Telur & Sisa Telur — khusus income */}
+            {form.type === "income" && (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+                <div>
+                  <label style={labelStyle}>Stok Telur (kg/butir)</label>
+                  <input
+                    type="number" step="any"
+                    value={form.stock ?? ""}
+                    onChange={e => set("stock", e.target.value === "" ? (undefined as unknown as number) : +e.target.value)}
+                    placeholder="Stok awal (bisa minus)"
+                    style={inputStyle}
+                    onFocus={e => (e.target.style.borderColor = colors.highlight)}
+                    onBlur={e => (e.target.style.borderColor = "#3c4a42")}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>Sisa Telur (kg/butir)</label>
+                  <input
+                    type="number" step="any"
+                    value={form.sisa ?? ""}
+                    onChange={e => set("sisa", e.target.value === "" ? (undefined as unknown as number) : +e.target.value)}
+                    placeholder="Sisa (bisa minus)"
+                    style={inputStyle}
+                    onFocus={e => (e.target.style.borderColor = colors.highlight)}
+                    onBlur={e => (e.target.style.borderColor = "#3c4a42")}
+                  />
+                </div>
               </div>
             )}
 
@@ -343,7 +375,7 @@ function TxModal({
                       const value = e.target.value
                       const newHarga = parseRupiahValue(value)
                       set("hargaInput", value)
-                      set("jumlah", form.vol * newHarga)
+                      set("jumlah", Math.round(form.vol * newHarga))
                     }}
                     placeholder="Rp0"
                     required
@@ -468,6 +500,29 @@ function Toast({ msg, type, onClose }: { msg: string; type: "alert" | "success" 
   )
 }
 
+type OpsCategoryKey = "pakan" | "vaksinVitamin" | "listrik" | "makanRokok" | "gaji" | "kebersihan" | "lainnya"
+
+function categorizeExpenseItem(category: string): OpsCategoryKey {
+  const c = category.toLowerCase()
+  if (/pakan|feed|karung/.test(c)) return "pakan"
+  if (/vaksin|vitamin|vitachick|neobro|obat|trimezyn|egg stimulan|mineral ayam|betadine|vetagumbosept|vita stress|em 4|flu ayam|cacing/.test(c)) return "vaksinVitamin"
+  if (/listrik|token|lampu|air|kipas|exhaust|kabel|blower|penghangat|emergency|penghangat|paralon|selang|fitting/.test(c)) return "listrik"
+  if (/bersih|wipol|sapu|serokan|kebersihan|roundup|racun lalat|pengusir|sikat/.test(c)) return "kebersihan"
+  if (/rokok|makan pekerja|kopi|biaya makan/.test(c)) return "makanRokok"
+  if (/gaji|gajian|thr|kasbon/.test(c)) return "gaji"
+  return "lainnya"
+}
+
+const OPS_CATEGORY_META: Record<OpsCategoryKey, { nama: string; icon: string }> = {
+  pakan:         { nama: "Pakan Ayam",       icon: "inventory" },
+  vaksinVitamin: { nama: "Vaksin & Vitamin", icon: "vaccines" },
+  listrik:       { nama: "Listrik & Air",    icon: "bolt" },
+  kebersihan:    { nama: "Kebersihan",       icon: "cleaning_services" },
+  makanRokok:    { nama: "Makan & Rokok",    icon: "restaurant" },
+  gaji:          { nama: "Gaji Karyawan",    icon: "groups" },
+  lainnya:       { nama: "Lainnya",          icon: "more_horiz" },
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function FinanceClient({
   initialTransactions,
@@ -486,7 +541,7 @@ export default function FinanceClient({
   const [deleteTx, setDeleteTx] = useState<Tx | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: "alert" | "success" | "warning" } | null>(null)
   const [activeNav, setActiveNav] = useState("Finance")
-  const [periodeIdx, setPeriodeIdx] = useState(biayaOperasional.length - 1)
+  const [periodeIdx, setPeriodeIdx] = useState(0) // will be set after dynamicBiayaOperasional is computed
   const [txTab, setTxTab] = useState<TabType>("income")
 
   // Dynamic transaction-based calculations
@@ -573,18 +628,6 @@ export default function FinanceClient({
   }, [incomeList, expenseList])
 
   const dynamicDetailOpsPerBulan = useMemo(() => {
-    type ExpenseCategoryKey = "pakan" | "vaksinVitamin" | "listrik" | "makanRokok" | "gaji" | "kebersihan" | "lainnya"
-
-    const categoryKeyMap: Record<string, ExpenseCategoryKey> = {
-      "Pakan Ayam": "pakan",
-      "Vaksin & Vitamin": "vaksinVitamin",
-      "Listrik & Air": "listrik",
-      "Makan & Rokok": "makanRokok",
-      "Gaji Karyawan": "gaji",
-      "Kebersihan": "kebersihan",
-      "Lain-lain": "lainnya",
-    }
-
     const byMonth = new Map<string, {
       bulan: string
       periode: string
@@ -626,7 +669,7 @@ export default function FinanceClient({
     expenseList.forEach(tx => {
       const monthData = ensureMonth(tx.date)
       if (!monthData) return
-      const field = categoryKeyMap[tx.category] ?? "lainnya"
+      const field = categorizeExpenseItem(tx.category)
       monthData[field] += tx.jumlah
       monthData.total += tx.jumlah
     })
@@ -634,6 +677,28 @@ export default function FinanceClient({
     const months = Array.from(byMonth.values()).sort((a, b) => a.periode.localeCompare(b.periode))
     return months
   }, [expenseList])
+
+  // ─── Dynamic Operational Expenses widget (from actual expense transactions) ──
+  const dynamicBiayaOperasional = useMemo(() => {
+    // Budget targets from the latest static period (used as spending targets)
+    const BUDGETS: Record<OpsCategoryKey, number> = {
+      pakan: 13_000_000, vaksinVitamin: 500_000, listrik: 800_000,
+      kebersihan: 300_000, makanRokok: 1_800_000, gaji: 1_500_000, lainnya: 5_000_000,
+    }
+    const keys: OpsCategoryKey[] = ["pakan","vaksinVitamin","listrik","kebersihan","makanRokok","gaji","lainnya"]
+    return dynamicDetailOpsPerBulan.map(month => ({
+      bulan: month.bulan,
+      items: keys
+        .filter(k => month[k] > 0)
+        .map(k => ({
+          nama: OPS_CATEGORY_META[k].nama,
+          icon: OPS_CATEGORY_META[k].icon,
+          jumlah: month[k],
+          budget: BUDGETS[k],
+        })),
+      total: month.total,
+    }))
+  }, [dynamicDetailOpsPerBulan])
 
   const totalPemasukanKasUtama = totalIncome + totalInvestor
   const totalPemasukan = totalPemasukanKasUtama + totalWarist
@@ -652,10 +717,35 @@ export default function FinanceClient({
   const balanceIcon = combinedBalance > 0 ? "check_circle" : combinedBalance < 0 ? "report_problem" : "info"
   
   const lastMonthTotal = dynamicPenjualanBulanan[dynamicPenjualanBulanan.length - 1]?.total ?? 0
-  const gaugePct = Math.min((lastMonthTotal / 25_000_000) * 100, 100)
-  const periode  = biayaOperasional[periodeIdx]
+  // Use last complete month for target achievement (skip current partial month)
+  const now = new Date()
+  const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  const completedMonths = dynamicPenjualanBulanan.filter(m => {
+    const d = new Date(m.periode + "-01")
+    return d.getFullYear() < now.getFullYear() || d.getMonth() + 1 < now.getMonth() + 1
+  })
+  const targetMonth = completedMonths.length > 0
+    ? completedMonths[completedMonths.length - 1]
+    : dynamicPenjualanBulanan[dynamicPenjualanBulanan.length - 1]
+  const targetMonthTotal = targetMonth?.total ?? 0
+  const targetMonthLabel = targetMonth?.bulan ?? "—"
+  const gaugePct = Math.min((targetMonthTotal / 25_000_000) * 100, 100)
+  // Use dynamic biaya operasional data (from actual expense transactions)
+  const effectivePeriodeIdx = dynamicBiayaOperasional.length > 0
+    ? Math.min(periodeIdx >= 0 ? periodeIdx : 0, dynamicBiayaOperasional.length - 1)
+    : 0
+  // Auto-set to last period on first render
+  const [periodeIdxInitialized, setPeriodeIdxInitialized] = useState(false)
+  useEffect(() => {
+    if (!periodeIdxInitialized && dynamicBiayaOperasional.length > 0) {
+      setPeriodeIdx(dynamicBiayaOperasional.length - 1)
+      setPeriodeIdxInitialized(true)
+    }
+  }, [dynamicBiayaOperasional.length, periodeIdxInitialized])
+
+  const periode = dynamicBiayaOperasional[effectivePeriodeIdx] ?? { bulan: "—", items: [], total: 0 }
   const operationalExpenseCurrent = periode.total
-  const totalOps = biayaOperasional.reduce((a,b) => a + b.total, 0)
+  const totalOps = dynamicBiayaOperasional.reduce((a,b) => a + b.total, 0)
 
   const generateFinanceAlert = useCallback(() => {
     if (combinedBalance < 0) {
@@ -875,10 +965,11 @@ export default function FinanceClient({
                     <div style={{ display:"flex", flexDirection:"column", alignItems:"center" }}>
                       <Gauge pct={gaugePct}/>
                       <div style={{ marginTop:16, textAlign:"center" }}>
-                        <div style={{ fontSize:20, fontWeight:700, color:"#4edea3" }}>
-                          {mounted ? rupiah(totalPemasukan) : "—"}
+                        <div style={{ fontSize:20, fontWeight:700, color: gaugePct >= 100 ? "#4edea3" : gaugePct >= 50 ? "#ffb95f" : "#ffb4ab" }}>
+                          {mounted ? rupiah(targetMonthTotal) : "—"}
                         </div>
-                        <div style={{ fontSize:13, color:"#bbcabf", marginTop:2 }}>Total Pemasukan</div>
+                        <div style={{ fontSize:13, color:"#bbcabf", marginTop:2 }}>Penjualan {targetMonthLabel}</div>
+                        <div style={{ fontSize:11, color:"#86948a", marginTop:2 }}>Target: {rupiah(25_000_000, true)}/bln</div>
                       </div>
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
@@ -1088,7 +1179,7 @@ export default function FinanceClient({
                       <span style={{ fontSize:11, fontWeight:700, color:"#e5e2e1", letterSpacing:"0.04em", textTransform:"uppercase", minWidth:64, textAlign:"center" }}>
                         {periode.bulan}
                       </span>
-                      <button onClick={() => setPeriodeIdx(Math.min(biayaOperasional.length-1, periodeIdx+1))} style={{ background:"transparent", border:"none", color:"#bbcabf", cursor:"pointer", lineHeight:0 }}>
+                      <button onClick={() => setPeriodeIdx(Math.min(dynamicBiayaOperasional.length-1, periodeIdx+1))} style={{ background:"transparent", border:"none", color:"#bbcabf", cursor:"pointer", lineHeight:0 }}>
                         <span className="material-symbols-outlined" style={{ fontSize:16 }}>chevron_right</span>
                       </button>
                     </div>

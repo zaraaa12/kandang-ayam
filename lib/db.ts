@@ -18,42 +18,48 @@ const globalForDb = globalThis as typeof globalThis & {
   pgPool?: Pool
   sqliteDb?: Database.Database
   dbMode?: 'postgres' | 'sqlite'
+  _sqliteFallbackUntil?: number
 }
 
 export type DbMode = 'postgres' | 'sqlite'
 
 /**
- * Get the current database mode
+ * Get the current database mode.
+ * If DATABASE_URL is set, prefers postgres. 
+ * Temporary sqlite fallback auto-resets after 30s to retry Supabase.
  */
 export function getDbMode(): DbMode {
-  if (globalForDb.dbMode) {
-    return globalForDb.dbMode
+  // If explicitly set to sqlite via env, always use sqlite
+  if (process.env.DB_MODE === 'sqlite') {
+    globalForDb.dbMode = 'sqlite'
+    return 'sqlite'
   }
-  
-  // Check if DATABASE_URL is configured
+
+  // If no DATABASE_URL, always sqlite
   if (!process.env.DATABASE_URL) {
-    console.log('📦 DATABASE_URL not configured, using SQLite for local development. To use Supabase/Postgres, set DATABASE_URL in .env.local or your deployment environment.')
     globalForDb.dbMode = 'sqlite'
     return 'sqlite'
   }
-  
-  // Try to determine mode from environment
-  const usePostgres = process.env.DB_MODE === 'postgres'
-  const useSqlite = process.env.DB_MODE === 'sqlite'
-  
-  if (useSqlite) {
-    globalForDb.dbMode = 'sqlite'
+
+  // Check if temporary sqlite fallback has expired (30s auto-retry)
+  if (globalForDb.dbMode === 'sqlite' && globalForDb._sqliteFallbackUntil) {
+    if (Date.now() >= globalForDb._sqliteFallbackUntil) {
+      // Reset — try postgres again
+      globalForDb.dbMode = 'postgres'
+      globalForDb._sqliteFallbackUntil = undefined
+      console.log('🔄 SQLite fallback expired, retrying Supabase/PostgreSQL...')
+      return 'postgres'
+    }
     return 'sqlite'
   }
-  
-  if (usePostgres) {
+
+  // Explicit postgres env or default
+  if (globalForDb.dbMode === 'postgres' || process.env.DB_MODE === 'postgres' || !globalForDb.dbMode) {
     globalForDb.dbMode = 'postgres'
     return 'postgres'
   }
-  
-  // Default to PostgreSQL if DATABASE_URL is set
-  globalForDb.dbMode = 'postgres'
-  return 'postgres'
+
+  return globalForDb.dbMode
 }
 
 /**
@@ -351,10 +357,12 @@ export async function closeDbPool(): Promise<void> {
 }
 
 /**
- * Force future calls to use SQLite.
+ * Temporarily fall back to SQLite for 30 seconds.
+ * After 30s, getDbMode() will auto-retry Supabase/PostgreSQL.
  */
 export function forceSqliteMode(): void {
   globalForDb.dbMode = "sqlite"
+  globalForDb._sqliteFallbackUntil = Date.now() + 30_000
 }
 
 /**

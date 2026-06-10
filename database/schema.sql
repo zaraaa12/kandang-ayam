@@ -10,14 +10,51 @@ create table if not exists produksi_records (
   updated_at timestamptz not null default now()
 );
 
-create table if not exists finance_transactions (
+create table if not exists finance_income (
   id text primary key,
   no text not null unique,
-  type text not null check (type in ('sale', 'expense')),
+  type text not null check (type = 'income'),
   tx_date date not null,
   category text not null,
   buyer text not null default '',
+  stock numeric(10, 2),
   vol numeric(10, 2) not null default 0 check (vol >= 0),
+  sisa numeric(10, 2),
+  harga integer,
+  jumlah integer not null check (jumlah >= 0),
+  notes text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists finance_expense (
+  id text primary key,
+  no text not null unique,
+  type text not null check (type = 'expense'),
+  tx_date date not null,
+  category text not null,
+  buyer text not null default '',
+  stock numeric(10, 2),
+  vol numeric(10, 2) not null default 0 check (vol >= 0),
+  sisa numeric(10, 2),
+  harga integer,
+  jumlah integer not null check (jumlah >= 0),
+  notes text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists finance_warist (
+  id text primary key,
+  no text not null unique,
+  type text not null check (type = 'warist'),
+  tx_date date not null,
+  category text not null,
+  buyer text not null default '',
+  stock numeric(10, 2),
+  vol numeric(10, 2) not null default 0 check (vol >= 0),
+  sisa numeric(10, 2),
+  harga integer,
   jumlah integer not null check (jumlah >= 0),
   notes text not null default '',
   created_at timestamptz not null default now(),

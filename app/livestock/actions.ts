@@ -3,13 +3,9 @@
 import { revalidatePath } from "next/cache"
 import {
   createLivestockBatch,
-  createLivestockVaccination,
   deleteLivestockBatch,
-  deleteLivestockVaccination,
   updateLivestockBatch,
-  updateLivestockVaccination,
   type LivestockBatchInput,
-  type LivestockVaccinationInput,
 } from "@/lib/livestock-db"
 import type { Batch } from "@/data/livestock"
 
@@ -47,52 +43,6 @@ function toBatchInput(form: {
   }
 }
 
-function toVaccinationInput(form: {
-  tanggal: string
-  nama: string
-  qty: number
-  satuan: string
-  harga?: number
-  subtotal: number
-  batch: string
-}): LivestockVaccinationInput {
-  if (!form.tanggal || Number.isNaN(Date.parse(form.tanggal))) {
-    throw new Error("Tanggal vaksinasi tidak valid.")
-  }
-
-  if (!form.nama.trim()) {
-    throw new Error("Nama vaksin wajib diisi.")
-  }
-
-  if (!Number.isInteger(form.qty) || form.qty < 1) {
-    throw new Error("Qty vaksin harus berupa bilangan bulat minimal 1.")
-  }
-
-  if (!form.satuan.trim()) {
-    throw new Error("Satuan vaksin wajib diisi.")
-  }
-
-  const harga = Number(form.harga ?? 0)
-  const subtotal = Number(form.subtotal)
-  if (!Number.isFinite(harga) || harga < 0 || !Number.isFinite(subtotal) || subtotal < 0) {
-    throw new Error("Harga atau subtotal vaksin tidak valid.")
-  }
-
-  if (!form.batch.trim() || form.batch === "—") {
-    throw new Error("Pilih minimal satu batch.")
-  }
-
-  return {
-    tanggal: form.tanggal,
-    nama: form.nama.trim(),
-    qty: Number(form.qty),
-    satuan: form.satuan.trim(),
-    harga: Math.round(harga),
-    subtotal: Math.round(subtotal),
-    batch: form.batch.trim(),
-  }
-}
-
 export async function saveLivestockBatchAction(
   id: string | null,
   form: { masuk: string; jumlah: number; tahun: number; bulan: number; hari: number; status: Batch["status"] },
@@ -118,33 +68,7 @@ export async function deleteLivestockBatchAction(id: string) {
   revalidatePath("/dashboard")
 }
 
-export async function saveLivestockVaccinationAction(
-  no: number | null,
-  form: {
-    tanggal: string
-    nama: string
-    qty: number
-    satuan: string
-    harga?: number
-    subtotal: number
-    batch: string
-  },
-) {
-  const input = toVaccinationInput(form)
-  const vaccination = no
-    ? await updateLivestockVaccination(no, input)
-    : await createLivestockVaccination(input)
-
-  revalidatePath("/livestock")
-
-  return vaccination
-}
-
-export async function deleteLivestockVaccinationAction(no: number) {
-  if (!Number.isInteger(no) || no < 1) {
-    throw new Error("Nomor record vaksinasi tidak valid.")
-  }
-
-  await deleteLivestockVaccination(no)
-  revalidatePath("/livestock")
-}
+// Note: Vaccination actions have been removed.
+// Vaccinations are now derived from finance_expense table.
+// To add/edit/delete vaccinations, use the Finance page (Pengeluaran tab)
+// with categories containing "vaksin" (e.g., "Vaksin ND Lasota", "Vaksin & Vitamin").
